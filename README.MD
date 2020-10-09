@@ -68,7 +68,7 @@ Example command to run analyzer:
     --appPackagePrefix = ""
     /**
      * Every dex package & file we process has a depth to it.
-     * Like com -> 1, com.goibibo -> 2, com.goibibo.hotels -> 3
+     * Like com -> 1, com.apkDemo -> 2, com.apkDemo.home -> 3
      * It starts with 1.
      * We filter the packages that we output in json by this constants.
      * This is the minimum depth that will be filtered out to reduce the noise.
