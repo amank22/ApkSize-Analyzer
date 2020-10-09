@@ -1,14 +1,30 @@
-# **ApkSize**<br>
-Command to run analyzer:
+# **ApkSize Analyzer**<br>
 
-Example Command:-
-`java -jar apkSize-1.0-SNAPSHOT-all.jar relative /101/mobile-build-release.apk /aapt/outputs/ /101/mapping.txt --appName=Goibibo --aapt2Executor=/Users/aman.kapoor/Library/Android/sdk/build-tools/30.0.0/aapt2 `
+ApkSize Analyzer is a command line java program to analyze the size of Apk and give report in multiple formats
+which you can then use in CI/CD environments (jenkins etc) to getter deeper insights for your apk. It uses the
+android studio plugin for analyzing apk as the base, so it should give report as you find in the Android studio.
+
+#### Features:
+* Analyzes Apk for files, dex, resources.
+* The report generates JSON, HTML, pdf for easy integration and reading.
+* You can provide a specific app package prefix which will be reported separately for easy classification.
+* The package sizes are calculated as combination of all the dex files.
+* Included a separate list for the images listed according to decreasing size.
+* Most of the lists are sorted in the decreasing order of their sizes.
+
+Example command to run analyzer:
+
+`java -jar apkSize-1.0-SNAPSHOT-all.jar relative /101/mobile-build-release.apk /aapt/outputs/ /101/mapping.txt --appName=ApkSizeDemo --aapt2Executor=/Users/aman.kapoor/Library/Android/sdk/build-tools/30.0.0/aapt2 `
+<br><br>
+
+![Screenshot](/screenshots/apkSizeScreenshot.png)
+
 <br><br>
 **Arguments:**
-<br>[0] = (REQUIRED) relative/abs -> Tells how to look for the path you have given whether relative to the current folder or absolute paths.
-<br>[1] = (REQUIRED) path of apk -> relative or absolute path of apk file. (Could be a bundle also)
-<br>[2] = (REQUIRED) path of output directory
-<br>[3] = (OPTIONAL) path of proguard mappings file
+0. (REQUIRED) relative/abs -> Tells how to look for the path you have given whether relative to the current folder or absolute paths.
+1. (REQUIRED) path of apk -> relative or absolute path of apk file. (Could be a bundle also)
+2. (REQUIRED) path of output directory
+3. (OPTIONAL) path of proguard mappings file
 
 ##### **Optional Arguments:**
 
@@ -84,3 +100,15 @@ Example Command:-
     * This is absolute path of aapt2 file.
     */
     aapt2Executor = ""
+    
+    
+#### Future tasks:
+* Add Test Cases
+* Integrate with CI/CD
+* Make proguard or other minification tool work and reduce the size
+* Make HTML report for appPackages more readable
+* Make it as a gradle plugin
+* Work to support the bundle files too. Currently, bundle files doesn't give dex results. 
+
+Note: These items are not in the order
+

@@ -44,8 +44,9 @@ object HtmlGenerator {
         return footer("footer") {
             div("content has-text-centered") {
                 p {
-                    strong("Apk Size Analyzer") + " by " + strong("Aman Kapoor") +
-                            ". Connect on aman.kapoor@go-mmt.com for any clarifications, doubts."
+                    strong("Apk Size Analyzer") + " by " + a("https://github.com/amank22/ApkSize-Analyzer"){
+                        strong("@amank22")
+                    }
                 }
             }
         }
@@ -135,7 +136,7 @@ object HtmlGenerator {
                     p(classes = "heading") {
                         "React Bundle Size"
                     } + p(classes = "title") {
-                        "${apkStats.reactBundleSizeInMb} MB"
+                        "${apkStats.reactBundleSizeInMb?:0} MB"
                     }
                 }
             } + div(classes = "column is-narrow has-text-centered") {
