@@ -1,5 +1,7 @@
 # **ApkSize Analyzer**<br>
 
+![Logo](/screenshots/apkSizeLogo.webp)
+
 ApkSize Analyzer is a command line java program to analyze the size of Apk and give report in multiple formats
 which you can then use in CI/CD environments (jenkins etc) to getter deeper insights for your apk. It uses the
 android studio plugin for analyzing apk as the base, so it should give report as you find in the Android studio.
