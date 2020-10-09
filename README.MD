@@ -14,7 +14,7 @@ android studio plugin for analyzing apk as the base, so it should give report as
 
 Example command to run analyzer:
 
-`java -jar apkSize-1.0-SNAPSHOT-all.jar relative /101/mobile-build-release.apk /aapt/outputs/ /101/mapping.txt --appName=ApkSizeDemo --aapt2Executor=/Users/aman.kapoor/Library/Android/sdk/build-tools/30.0.0/aapt2 `
+`java -jar apkSize-0.1-beta-all.jar relative /101/mobile-build-release.apk /aapt/outputs/ /101/mapping.txt --appName=ApkSizeDemo --aapt2Executor=/Users/aman.kapoor/Library/Android/sdk/build-tools/30.0.0/aapt2 `
 <br><br>
 
 ![Screenshot](/screenshots/apkSizeScreenshot.png)
