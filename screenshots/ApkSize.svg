@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="400px" height="194px" viewBox="0 0 400 194" version="1.1" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
+    <title>ApkSize</title>
+    <g id="ApkSize" stroke="none" stroke-width="1" fill="none" fill-rule="evenodd" font-size="40">
+        <text id="Apk-Size-Analyzer" font-family="ProductSans-Black, Product Sans Black" font-weight="800" fill="#F14668">
+            <tspan x="33.04" y="55">Apk Size Analyzer</tspan>
+        </text>
+        <text id="Deeper-Insights-for" fill-rule="nonzero" font-family="ProductSans-Light, Product Sans Light" font-weight="normal" fill="#000000">
+            <tspan x="39.32" y="119">Deeper Insights for </tspan>
+            <tspan x="117.7" y="167">your </tspan>
+            <tspan x="202.18" y="167" font-family="ProductSans-Medium, Product Sans Medium">Apk!</tspan>
+        </text>
+    </g>
+</svg>
