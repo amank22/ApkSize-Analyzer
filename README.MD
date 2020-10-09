@@ -1,5 +1,3 @@
-# **ApkSize Analyzer**<br>
-
 ![Logo](/screenshots/ApkSize.svg)
 
 ApkSize Analyzer is a command line java program to analyze the size of Apk and give report in multiple formats
