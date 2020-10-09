@@ -26,7 +26,7 @@ Example command to run analyzer:
 2. (REQUIRED) path of output directory
 3. (OPTIONAL) path of proguard mappings file
 
-##### **Optional Arguments:**
+##### **Optional Parameters:**
 
     /**
     * The app name to print in the html & pdf report
