@@ -1,0 +1,63 @@
+buildscript {
+    repositories {
+        jcenter()
+        maven { url "https://plugins.gradle.org/m2/" }
+    }
+    dependencies {
+        classpath "net.sf.proguard:proguard-gradle:6.2.2"
+    }
+}
+
+
+plugins {
+    id 'org.jetbrains.kotlin.jvm' version '1.4.10'
+    id 'application'
+    id 'com.github.johnrengelman.shadow' version '6.0.0'
+}
+
+group = 'com.gi.plugins'
+version = '1.0-SNAPSHOT'
+
+repositories {
+    google()
+    jcenter()
+    mavenCentral()
+}
+dependencies {
+    implementation 'com.google.code.gson:gson:2.8.6'
+    implementation group: 'com.android.tools.apkparser', name: 'apkanalyzer', version: '27.0.1'
+    implementation 'org.celtric.kotlin:kotlin-html:0.1.4'
+    implementation group: 'com.openhtmltopdf', name: 'openhtmltopdf-pdfbox', version: '1.0.4'
+
+    testImplementation 'org.jetbrains.kotlin:kotlin-test-junit'
+}
+compileKotlin {
+    kotlinOptions.jvmTarget = '1.8'
+}
+application {
+    mainClassName = 'MainKt'
+}
+
+task minimizedJar(type: proguard.gradle.ProGuardTask, dependsOn: shadowJar) {
+    injars "build/libs/apkSize-$version-all.jar"
+    outjars "build/libs/apkSize-$version-min.jar"
+    libraryjars '/Applications/Android Studio.app/Contents/jre/jdk/Contents/Home' + "/lib/rt.jar"
+    printmapping "build/libs/apkSize-$version-mapping.map"
+    ignorewarnings
+    dontoptimize
+    dontwarn
+    //optimizations '!code/allocation/variable'
+
+    def keepClasses = [
+            'MainKt',
+            'kotlin.text.RegexOption',
+            'kotlin.** { *; }'
+    ]
+
+    for (keepClass in keepClasses) {
+        keep access: 'public', name: keepClass, {
+            method access: 'public'
+            method access: 'private'
+        }
+    }
+}
