@@ -1,32 +1,66 @@
 import com.gi.apksize.models.AnalyzerOptions
 import com.gi.apksize.tasks.ApkSizeTask
+import com.google.gson.Gson
+import java.io.File
 
 fun main(args: Array<String>) {
     println("Analysing apk!")
-    println(args.joinToString())
+    var analyzerOptions = AnalyzerOptions()
+
     val absOrRelative = args[0]
     if (absOrRelative != "abs" && absOrRelative != "relative") {
         println("First argument should be abs or relative. Relates to the path to look for.")
         return
     }
     val isAbsolutePaths = absOrRelative == "abs"
-    val input = args[1]
-    if (input.isBlank()) {
-        println("Input should not be empty")
+
+    val secondArgument = args.getOrNull(1)
+    if (secondArgument == null) {
+        println("Pass the --config file path or separate arguments")
         return
     }
-    val output = args[2]
-    if (output.isBlank()) {
-        println("Output should not be empty")
-        return
+    if (secondArgument.startsWith("--config=")) {
+        val jsonConfigPath = secondArgument.removePrefix("--config=")
+        val configFile = File(jsonConfigPath)
+        if (configFile.exists() && configFile.canRead()) {
+            val configString = configFile.readText()
+            try {
+                analyzerOptions = Gson().fromJson(configString, AnalyzerOptions::class.java)
+                if (analyzerOptions == null) {
+                    println("Config file should not be empty")
+                    return
+                }
+            } catch (e: Exception) {
+                println("Error reading config file : ${e.localizedMessage}")
+                return
+            }
+        } else {
+            println("Config file does not exists or can't be read")
+            return
+        }
+    } else {
+
+        val input = args[1]
+        if (input.isBlank()) {
+            println("Input should not be empty")
+            return
+        }
+        analyzerOptions.inputFilePath = input
+        val output = args[2]
+        if (output.isBlank()) {
+            println("Output should not be empty")
+            return
+        }
+        analyzerOptions.outputFolderPath = output
+        var proguard = args.elementAtOrNull(3)
+        if (proguard?.startsWith("--") == true) {
+            proguard = null
+        }
+        analyzerOptions.inputFileProguardPath = proguard ?: ""
+        updateOptions(args, analyzerOptions)
     }
-    var proguard = args.elementAtOrNull(3)
-    if (proguard?.startsWith("--") == true) {
-        proguard = null
-    }
-    val analyzerOptions = AnalyzerOptions()
-    updateOptions(args, analyzerOptions)
-    ApkSizeTask.evaluateSize(isAbsolutePaths, input, output, proguard, analyzerOptions)
+    analyzerOptions.arePathsAbsolute = isAbsolutePaths
+    ApkSizeTask.evaluate(analyzerOptions)
     println("Analysed apk. You can find the files in the output directory you gave.")
 }
 

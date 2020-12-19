@@ -3,6 +3,18 @@ package com.gi.apksize.models
 class AnalyzerOptions {
 
     /**
+     * Set whether the paths provided in the json/arguments are relative to current directory or absolute paths.
+     */
+    var arePathsAbsolute = false
+
+    var inputFilePath = ""
+
+    var inputFileProguardPath = ""
+
+    var outputFolderPath = ""
+
+
+    /**
      * The app name to print in the html & pdf report
      * @default empty
      */
@@ -83,5 +95,40 @@ class AnalyzerOptions {
      */
     var aapt2Executor = ""
     //endregion
+
+    //region Diff
+    /**
+     * Set this value to true if you want to compare 2 apks.
+     * Program will ignore second apk file if this is false
+     * Default value is false.
+     */
+    var isDiffMode = false
+
+    /**
+     * Apk path according to abs/relative argument of the apk which needs to be compared to 1st one.
+     * Default path is empty.
+     * isDiffMode must be true for this comparison mode to enable.
+     */
+    var compareFilePath = ""
+
+    var compareFileProguardPath = ""
+
+    var diffSizeLimiter = 10000L
+
+    //endregion
+
+
+
+    fun getPath(path: String): String {
+        return if (arePathsAbsolute) {
+            path
+        } else {
+            val currentPath = System.getProperty("user.dir")
+            val updatedPath = if (!path.startsWith("/")) {
+                "$path/"
+            } else path
+            currentPath + updatedPath
+        }
+    }
 
 }

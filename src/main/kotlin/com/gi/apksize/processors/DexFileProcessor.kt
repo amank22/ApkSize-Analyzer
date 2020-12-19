@@ -27,7 +27,9 @@ object DexFileProcessor {
         apk: Path,
         apkStats: ApkStats,
         proguardMappingFile: File?,
-        analyzerOptions: AnalyzerOptions
+        analyzerOptions: AnalyzerOptions,
+        isCompareFile: Boolean = false,
+        needAppPackages: Boolean = true
     ) {
         val arch = Archives.open(apk, CustomLogger())
         arch.use {
@@ -62,9 +64,17 @@ object DexFileProcessor {
             val appPackages = uniquePackageList.filter { it.basePackage.startsWith(analyzerOptions.appPackagePrefix) }
                 .take(analyzerOptions.appPackagesMaxCount)
             val dexStats = DexFileStats.create(dexBackedDexList)
-            apkStats.dexStats = dexStats
-            apkStats.dexPackages = uniquePackageList.take(analyzerOptions.dexPackagesMaxCount)
-            apkStats.appPackages = appPackages
+            if (!isCompareFile) {
+                apkStats.dexStats = dexStats
+                apkStats.dexPackages = uniquePackageList.take(analyzerOptions.dexPackagesMaxCount)
+                if (needAppPackages)
+                    apkStats.appPackages = appPackages
+            } else {
+                apkStats.comparedDexStats = dexStats
+                apkStats.comparedDexPackages = uniquePackageList.take(analyzerOptions.dexPackagesMaxCount)
+                if (needAppPackages)
+                    apkStats.comparedAppPackages = appPackages
+            }
         }
     }
 
@@ -106,7 +116,7 @@ object DexFileProcessor {
         model: TreeModel,
         node: DexElementNode,
         dexPackagesList: MutableList<DexPackageModel>,
-        depth : Int,
+        depth: Int,
         analyzerOptions: AnalyzerOptions
     ) {
         if (node.size < analyzerOptions.dexPackagesSizeLimiter) return

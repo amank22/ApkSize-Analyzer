@@ -25,9 +25,11 @@ repositories {
 }
 dependencies {
     implementation 'com.google.code.gson:gson:2.8.6'
-    implementation group: 'com.android.tools.apkparser', name: 'apkanalyzer', version: '27.0.1'
+    implementation group: 'com.android.tools.apkparser', name: 'apkanalyzer', version: '27.1.1'
     implementation 'org.celtric.kotlin:kotlin-html:0.1.4'
     implementation group: 'com.openhtmltopdf', name: 'openhtmltopdf-pdfbox', version: '1.0.4'
+    implementation group: 'com.google.archivepatcher', name: 'archive-patch-generator', version: '1.0.4'
+    implementation group: 'com.google.archivepatcher', name: 'archive-patch-explainer', version: '1.0.4'
 
     testImplementation 'org.jetbrains.kotlin:kotlin-test-junit'
 }
