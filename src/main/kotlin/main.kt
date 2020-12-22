@@ -61,7 +61,7 @@ fun main(args: Array<String>) {
     }
     analyzerOptions.arePathsAbsolute = isAbsolutePaths
     ApkSizeTask.evaluate(analyzerOptions)
-    println("Analysed apk. You can find the files in the output directory you gave.")
+    println("Analysed apk. You can find the files the output files at ${analyzerOptions.outputFolderPath}.")
 }
 
 fun updateOptions(args: Array<String>, analyzerOptions: AnalyzerOptions) {

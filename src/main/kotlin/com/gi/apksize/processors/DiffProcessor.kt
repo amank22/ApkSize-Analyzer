@@ -7,6 +7,8 @@ import com.gi.apksize.models.DexPackageDiffModel
 import com.gi.apksize.models.DexPackageModel
 import com.gi.apksize.utils.ApkSizeHelpers
 import java.io.File
+import java.nio.file.Path
+import kotlin.math.absoluteValue
 
 object DiffProcessor {
 
@@ -17,27 +19,38 @@ object DiffProcessor {
     ): ApkStats {
 
         val apkStats = ApkStats()
-
-//        val numberOfProcessors = Runtime.getRuntime().availableProcessors()
-//        val pool: ExecutorService = Executors.newFixedThreadPool(numberOfProcessors)
         val apkPath = releaseApkFile.toPath()
         val compareApkPath = compareApkFile.toPath()
-//        pool.submit {
-//
-//        }
-//
-////        pool.shutdown()
-//        try {
-//            pool.awaitTermination(Long.MAX_VALUE, TimeUnit.MILLISECONDS)
-//        } catch (e: InterruptedException) {
-//            println(e.message)
-//        }
 
-        apkStats.fileDiffs = FileToFileDiffProcessor.diff(
+        if (!analyzerOptions.disableFileByFileComparison) {
+            apkStats.fileDiffs = FileToFileDiffProcessor.diff(
+                apkPath,
+                compareApkPath, analyzerOptions
+            )
+        }
+
+        calculateBaseSizes(apkStats, apkPath, compareApkPath)
+
+        calculateDexPackagesDiffs(
             apkPath,
-            compareApkPath, analyzerOptions
+            apkStats,
+            proguardMappingFile,
+            analyzerOptions,
+            compareApkPath,
+            compareProguardMappingFile
         )
 
+        return apkStats
+    }
+
+    private fun calculateDexPackagesDiffs(
+        apkPath: Path,
+        apkStats: ApkStats,
+        proguardMappingFile: File?,
+        analyzerOptions: AnalyzerOptions,
+        compareApkPath: Path,
+        compareProguardMappingFile: File?
+    ) {
         DexFileProcessor.calculateDexStats(
             apkPath, apkStats, proguardMappingFile,
             analyzerOptions, isCompareFile = false, needAppPackages = false
@@ -51,35 +64,48 @@ object DiffProcessor {
         val dexPackages = apkStats.dexPackages.orEmpty()
         val compareDexPackages = apkStats.comparedDexPackages.orEmpty()
         val packagesSet = hashSetOf<String>()
-        val l1 = calculateDexPackagesSizeDiff(dexPackages, packagesSet, compareDexPackages, analyzerOptions)
-        val l2 = calculateDexPackagesSizeDiff(compareDexPackages, packagesSet, dexPackages, analyzerOptions)
+        val l1 = calculateDexPackagesSizeDiff(
+            dexPackages, packagesSet,
+            compareDexPackages, analyzerOptions
+        )
+        val l2 = calculateDexPackagesSizeDiff(
+            compareDexPackages, packagesSet,
+            dexPackages, analyzerOptions, true
+        )
         val l3 = (l1 + l2).sortedByDescending { it.packageSizeDiff }
         apkStats.dexPackagesDiffs = l3
         apkStats.dexPackages = null
         apkStats.comparedDexPackages = null
 
+        apkStats.diffApkSize = (apkStats.compareApkSize ?: 0) - (apkStats.apkSize ?: 0)
+        apkStats.diffApkSizeInMb =
+            ApkSizeHelpers.roundOffDecimal(
+                (apkStats.compareApkSizeInMb ?: 0.0) - (apkStats.apkSizeInMb ?: 0.0)
+            )
+        apkStats.diffDownloadSize = (apkStats.compareDownloadSize ?: 0) - (apkStats.downloadSize ?: 0)
+        apkStats.diffDownloadSizeInMb =
+            ApkSizeHelpers.roundOffDecimal(
+                (apkStats.compareDownloadSizeInMb ?: 0.0) - (apkStats.downloadSizeInMb ?: 0.0)
+            )
+    }
+
+    private fun calculateBaseSizes(
+        apkStats: ApkStats,
+        apkPath: Path,
+        compareApkPath: Path
+    ) {
         val apkSizeCalculator = ApkSizeCalculator.getDefault()
 
         ApkSizeHelpers.calculateBasicSizes(apkStats, apkSizeCalculator, apkPath)
         ApkSizeHelpers.calculateBasicSizes(apkStats, apkSizeCalculator, compareApkPath, true)
-
-        apkStats.diffApkSize = (apkStats.compareApkSize?:0) - (apkStats.apkSize?:0)
-        apkStats.diffApkSizeInMb =
-            ApkSizeHelpers.roundOffDecimal(
-                (apkStats.compareApkSizeInMb?:0.0) - (apkStats.apkSizeInMb?:0.0))
-        apkStats.diffDownloadSize = (apkStats.compareDownloadSize?:0) - (apkStats.downloadSize?:0)
-        apkStats.diffDownloadSizeInMb =
-            ApkSizeHelpers.roundOffDecimal(
-                (apkStats.compareDownloadSizeInMb?:0.0) - (apkStats.downloadSizeInMb?:0.0))
-
-        return apkStats
     }
 
     private fun calculateDexPackagesSizeDiff(
         dexPackages: List<DexPackageModel>,
         packagesSet: HashSet<String>,
         compareDexPackages: List<DexPackageModel>,
-        analyzerOptions: AnalyzerOptions
+        analyzerOptions: AnalyzerOptions,
+        isReversed: Boolean = false
     ): MutableList<DexPackageDiffModel> {
         val list = mutableListOf<DexPackageDiffModel>()
         dexPackages.forEach { baseDex ->
@@ -88,8 +114,12 @@ object DiffProcessor {
             val compareDex = compareDexPackages.find { it.basePackage == pck }
             if (compareDex != null) {
                 packagesSet.add(pck)
-                val diff = compareDex.basePackageSize - baseDex.basePackageSize
-                if (diff > analyzerOptions.diffSizeLimiter) {
+                val diff = if (isReversed) {
+                    baseDex.basePackageSize - compareDex.basePackageSize
+                } else {
+                    compareDex.basePackageSize - baseDex.basePackageSize
+                }
+                if (diff.absoluteValue > analyzerOptions.diffSizeLimiter) {
                     val dexDiff = DexPackageDiffModel(
                         pck, baseDex.basePackageSize, baseDex.packageSizeKb,
                         compareDex.basePackageSize, compareDex.packageSizeKb,

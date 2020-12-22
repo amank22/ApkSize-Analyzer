@@ -4,6 +4,7 @@ import com.gi.apksize.models.AnalyzerOptions
 import com.gi.apksize.models.ApkStats
 import com.gi.apksize.processors.ApkFileProcessor
 import com.gi.apksize.processors.DiffProcessor
+import com.gi.apksize.ui.DiffHtmlGenerator
 import com.gi.apksize.ui.HtmlGenerator
 import com.gi.apksize.ui.PdfGenerator
 import org.jetbrains.kotlin.util.removeSuffixIfPresent
@@ -39,10 +40,10 @@ object ApkSizeTask {
         }
         apkStats.apkName = analyzerOptions.appName
         writeApkStatsToJsonFile(apkStats, outputFolder)
+        val html = writeApkStatsToHtmlFile(apkStats, outputFolder, analyzerOptions.isDiffMode)
+        writeApkStatsToPdfFile(html, outputFolder)
         if (!analyzerOptions.isDiffMode) {
             writeAaptStatsToJsonFile(apkStats, outputFolder)
-            val html = writeApkStatsToHtmlFile(apkStats, outputFolder)
-            writeApkStatsToPdfFile(html, outputFolder)
         }
     }
 
@@ -87,13 +88,20 @@ object ApkSizeTask {
         apkSizeReportFile.writeText(apkStats.json())
     }
 
-    private fun writeApkStatsToHtmlFile(apkStats: ApkStats, outputFolder: File): String {
+    private fun writeApkStatsToHtmlFile(
+        apkStats: ApkStats, outputFolder: File,
+        isDiffMode: Boolean
+    ): String {
         val apkSizeReportFile = File(outputFolder, "index.html")
         if (apkSizeReportFile.exists()) {
             apkSizeReportFile.delete()
             apkSizeReportFile.createNewFile()
         }
-        val html = HtmlGenerator.getHtml(apkStats)
+        val html = if (isDiffMode) {
+            DiffHtmlGenerator.getHtml(apkStats)
+        } else {
+            HtmlGenerator.getHtml(apkStats)
+        }
         apkSizeReportFile.writeText(html)
         return html
     }
