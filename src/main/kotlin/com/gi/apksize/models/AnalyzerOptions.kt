@@ -3,6 +3,27 @@ package com.gi.apksize.models
 class AnalyzerOptions {
 
     /**
+     * Set whether the paths provided in the json/arguments are relative to current directory or absolute paths.
+     */
+    var arePathsAbsolute = false
+
+    /**
+     * Input apk file to test with. (This is must)
+     */
+    var inputFilePath = ""
+
+    /**
+     * Input proguard mapping file to test with. (Optional)
+     */
+    var inputFileProguardPath = ""
+
+    /**
+     * Output folder path to put all the output files. (This is must)
+     */
+    var outputFolderPath = ""
+
+
+    /**
      * The app name to print in the html & pdf report
      * @default empty
      */
@@ -83,5 +104,61 @@ class AnalyzerOptions {
      */
     var aapt2Executor = ""
     //endregion
+
+    //region Diff
+    /**
+     * Set this value to true if you want to compare 2 apks.
+     * Program will ignore second apk file if this is false
+     * Default value is false.
+     */
+    var isDiffMode = false
+
+    /**
+     * Apk path according to abs/relative argument of the apk which needs to be compared to 1st one.
+     * Default path is empty.
+     * isDiffMode must be true for this comparison mode to enable.
+     */
+    var compareFilePath = ""
+
+    /**
+     * Apk proguard mapping file for the second/comparing file.
+     * Default path is empty.
+     * isDiffMode must be true for this comparison mode to enable.
+     */
+    var compareFileProguardPath = ""
+
+    /**
+     * This is the size limiter for differences of dex packages.
+     * Any package size increase/decrease below this value will be discarded from report.
+     * Default : 10000 (~10kb).
+     * Value must be in bytes.
+     */
+    var diffSizeLimiter = 10000L
+
+    /**
+     * This is a check to enable/disable file-to-file comparison of both the apks.
+     * This comparison usually takes really long with big apks (Around 4-8 mins for 50 MB apks)
+     * Dex package comparison will still run.
+     */
+    var disableFileByFileComparison = false
+
+    //endregion
+
+
+    /**
+     * Returns path according to `arePathsAbsolute` value.
+     * Incase of relative path, appends the base dir path.
+     */
+    fun getPath(path: String): String {
+        return if (arePathsAbsolute) {
+            path
+        } else {
+            val currentPath = System.getProperty("user.dir")
+            val updatedPath = if (!path.startsWith("/")) {
+                "$path/"
+            } else path
+            currentPath + updatedPath
+        }
+    }
 
 }

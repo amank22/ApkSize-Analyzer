@@ -1,0 +1,8 @@
+{
+  "inputFilePath":"/samples/input/mobile-build-release.apk",
+  "inputFileProguardPath":"/samples/input/mapping.txt",
+  "outputFolderPath":"/samples/outputs/",
+  "appName":"Sample",
+  "appPackagePrefix":"com.sample",
+  "aapt2Executor":"/Users/<<user>>/Library/Android/sdk/build-tools/30.0.0/aapt2"
+}

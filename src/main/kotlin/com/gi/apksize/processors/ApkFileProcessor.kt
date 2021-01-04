@@ -30,7 +30,7 @@ object ApkFileProcessor {
         val pool: ExecutorService = Executors.newFixedThreadPool(numberOfProcessors)
 
         pool.submit {
-            calculateBasicSizes(apkStats, apkSizeCalculator, apk)
+            ApkSizeHelpers.calculateBasicSizes(apkStats, apkSizeCalculator, apk)
             ApkGeneralFileProcessor.calculatePerFileSize(apkStats, apkSizeCalculator, apk, analyzerOptions)
         }
         pool.submit {
@@ -51,22 +51,5 @@ object ApkFileProcessor {
         }
 
         return apkStats
-    }
-
-    /**
-     * Calculates basic file sizes like raw file size, download file size.
-     */
-    private fun calculateBasicSizes(
-        apkStats: ApkStats,
-        apkSizeCalculator: ApkSizeCalculator,
-        apk: Path
-    ) {
-        val downloadSize = apkSizeCalculator.getFullApkDownloadSize(apk)
-        apkStats.downloadSize = downloadSize
-        apkStats.downloadSizeInMb = ApkSizeHelpers.roundOffDecimal(downloadSize / BYTE_TO_MB_DIVIDER)
-        val fullApkRawSize = apkSizeCalculator.getFullApkRawSize(apk)
-        apkStats.apkSize = fullApkRawSize
-        apkStats.apkSizeInMb =
-            ApkSizeHelpers.roundOffDecimal(fullApkRawSize / BYTE_TO_MB_DIVIDER)
     }
 }

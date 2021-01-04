@@ -1,0 +1,10 @@
+{
+  "inputFilePath":"/samples/input/mobile-build-release.apk",
+  "inputFileProguardPath":"/samples/input/mapping.txt",
+  "outputFolderPath":"/samples/outputs/",
+  "appName":"Sample",
+  "appPackagePrefix":"com.sample",
+  "isDiffMode":true,
+  "compareFilePath":"/samples/mobile-build-release-big.apk",
+  "compareFileProguardPath":"/samples/mapping-big.txt",
+}
