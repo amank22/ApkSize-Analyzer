@@ -28,7 +28,7 @@ object ApkSizeTask {
         val outputFolder = File(outputDirectory)
         val proguardMappingFile = if (proguardFilePath.isNullOrBlank()) null else File(proguardFilePath)
         if (!releaseApkFile.exists()) {
-            throw Exception("Apk file does not exists on $releaseApkPath")
+            throw Exception("Apk file does not exists on $releaseApkPath. Are you sure you are using relative/absolute paths correctly?")
         }
         if (!outputFolder.exists()) {
             outputFolder.mkdirs()
@@ -60,7 +60,7 @@ object ApkSizeTask {
         val compareProguardMappingFile =
             if (compareProguardFilePath.isNullOrBlank()) null else File(compareProguardFilePath)
         if (!compareApkFile.exists()) {
-            throw Exception("Apk file does not exists on $compareApkPath")
+            throw Exception("Apk file does not exists on $compareApkPath. Are you sure you are using relative/absolute paths correctly?")
         }
         return DiffProcessor.calculate(
             releaseApkFile, proguardMappingFile,

@@ -16,7 +16,7 @@ plugins {
 }
 
 group = 'com.gi.plugins'
-version = '0.1-beta'
+version = '0.2-beta'
 
 repositories {
     google()
@@ -38,6 +38,16 @@ compileKotlin {
 }
 application {
     mainClassName = 'MainKt'
+}
+
+shadowJar {
+    zip64 true
+    mergeServiceFiles {
+        exclude "META-INF/*.SF"
+        exclude 'META-INF/*.DSA'
+        exclude 'META-INF/*.RSA'
+        exclude "LICENSE*"
+    }
 }
 
 task minimizedJar(type: proguard.gradle.ProGuardTask, dependsOn: shadowJar) {
