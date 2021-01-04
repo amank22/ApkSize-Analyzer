@@ -1,0 +1,22 @@
+{
+  "inputFilePath":"/samples/input/mobile-build-release.apk",
+  "inputFileProguardPath":"/samples/input/mapping.txt",
+  "outputFolderPath":"/samples/outputs/",
+  "appName":"Sample",
+  "generateHtmlReport" : true,
+  "generatePdfReport" : true,
+  "topFilesImagesSizeLimiter":10240,
+  "filteredFilesSizeLimiter":51200,
+  "filesListMaxCount":20,
+  "appPackagePrefix":"",
+  "dexPackagesMinDepth":2,
+  "appPackagesMaxCount":20,
+  "dexPackagesMaxCount":30,
+  "dexPackagesSizeLimiter":51200,
+  "aapt2Executor":"/Users/<<user>>/Library/Android/sdk/build-tools/30.0.0/aapt2",
+  "isDiffMode":true,
+  "compareFilePath":"/samples/mobile-build-release-big.apk",
+  "compareFileProguardPath":"/samples/mapping-big.txt",
+  "diffSizeLimiter":10000,
+  "disableFileByFileComparison":false
+}
