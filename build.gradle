@@ -1,22 +1,23 @@
 buildscript {
     repositories {
-        jcenter()
         maven { url "https://plugins.gradle.org/m2/" }
-    }
-    dependencies {
-        classpath "net.sf.proguard:proguard-gradle:6.2.2"
     }
 }
 
-
 plugins {
-    id 'org.jetbrains.kotlin.jvm' version '1.4.10'
-    id 'application'
-    id 'com.github.johnrengelman.shadow' version '6.0.0'
+    id 'org.jetbrains.kotlin.jvm' version '1.5.0'
+    id 'java-library'
+    id 'com.github.johnrengelman.shadow' version '7.0.0'
+    id 'maven-publish'
+}
+
+configurations {
+    r8
 }
 
 group = 'com.gi.plugins'
-version = '0.2-beta'
+version = '0.3.1'
+def androidToolsVersion = '30.0.0-alpha15'
 
 repositories {
     google()
@@ -24,21 +25,27 @@ repositories {
     mavenCentral()
 }
 dependencies {
+    implementation platform('org.jetbrains.kotlin:kotlin-bom')
+    implementation 'org.jetbrains.kotlin:kotlin-stdlib-jdk8'
     implementation 'com.google.code.gson:gson:2.8.6'
-    implementation group: 'com.android.tools.apkparser', name: 'apkanalyzer', version: '27.1.1'
+    implementation "com.android.tools:common:$androidToolsVersion"
+    implementation "com.android.tools.apkparser:apkanalyzer:$androidToolsVersion"
+    implementation group: 'org.smali', name: 'dexlib2', version: '2.2.4'
     implementation 'org.celtric.kotlin:kotlin-html:0.1.4'
-    implementation group: 'com.openhtmltopdf', name: 'openhtmltopdf-pdfbox', version: '1.0.4'
+//    implementation group: 'com.openhtmltopdf', name: 'openhtmltopdf-pdfbox', version: '1.0.8'
     implementation group: 'com.google.archivepatcher', name: 'archive-patch-generator', version: '1.0.4'
     implementation group: 'com.google.archivepatcher', name: 'archive-patch-explainer', version: '1.0.4'
 
     testImplementation 'org.jetbrains.kotlin:kotlin-test-junit'
+
+    r8 'com.android.tools:r8:2.2.64'
 }
 compileKotlin {
     kotlinOptions.jvmTarget = '1.8'
 }
-application {
-    mainClassName = 'MainKt'
-}
+//application {
+//    mainClassName = 'MainKt'
+//}
 
 shadowJar {
     zip64 true
@@ -46,30 +53,68 @@ shadowJar {
         exclude "META-INF/*.SF"
         exclude 'META-INF/*.DSA'
         exclude 'META-INF/*.RSA'
-        exclude "LICENSE*"
+        exclude 'META-INF/maven/**'
+        exclude 'META-INF/services/**'
+        exclude 'META-INF/proguard/**'
+    }
+    exclude '**/*.properties'
+    exclude "LICENSE*"
+    exclude '**/*.kotlin_builtins'
+    exclude '**/*.kotlin_metadata'
+    exclude '**/*.kotlin_module'
+    exclude '**/*.kotlin_builtins'
+//    exclude '**/*.txt'
+    exclude '**/*.xml'
+    exclude '**/private-apis.txt'
+    exclude '**/public-suffix-list.txt'
+    exclude '**/module-info.class'
+    exclude '**/*.proto'
+    exclude '**/*.icc'
+    exclude 'com/sun/**'
+    exclude 'typos/**'
+    exclude 'xsd/**'
+    exclude 'com/android/dvlib/**'
+    exclude 'com/android/sdklib/**'
+    exclude 'com/intellij/**'
+}
+
+def r8File = new File("$buildDir/libs/$archivesBaseName-r8.jar")
+def r8Jar = tasks.register('r8Jar', JavaExec) { task ->
+    def rules = file('src/main/shrink-rules.pro')
+    task.inputs.files(shadowJar.outputs.files, rules)
+    task.outputs.file(r8File)
+
+    task.classpath(configurations.r8)
+    task.main = 'com.android.tools.r8.R8'
+    task.args = [
+            '--release',
+            '--classfile',
+            '--output', r8File.toString(),
+            '--pg-conf', rules.toString(),
+            '--lib', System.properties.get('java.home').toString()
+    ]
+    doFirst {
+        task.args += shadowJar.archiveFile.get().asFile
     }
 }
 
-task minimizedJar(type: proguard.gradle.ProGuardTask, dependsOn: shadowJar) {
-    injars "build/libs/apkSize-$version-all.jar"
-    outjars "build/libs/apkSize-$version-min.jar"
-    libraryjars '/Applications/Android Studio.app/Contents/jre/jdk/Contents/Home' + "/lib/rt.jar"
-    printmapping "build/libs/apkSize-$version-mapping.map"
-    ignorewarnings
-    dontoptimize
-    dontwarn
-    //optimizations '!code/allocation/variable'
+task minimizedJar(dependsOn: r8Jar)
 
-    def keepClasses = [
-            'MainKt',
-            'kotlin.text.RegexOption',
-            'kotlin.** { *; }'
-    ]
+tasks.named('assemble').configure { task ->
+    task.dependsOn(r8Jar)
+}
 
-    for (keepClass in keepClasses) {
-        keep access: 'public', name: keepClass, {
-            method access: 'public'
-            method access: 'private'
+publishing {
+    publications {
+        apkSize(MavenPublication) {
+            from components.java
+        }
+    }
+
+    repositories {
+        maven {
+            name = 'ApkSize'
+            url = layout.buildDirectory.dir("repo")
         }
     }
 }

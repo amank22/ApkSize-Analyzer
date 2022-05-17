@@ -2,41 +2,21 @@ package com.gi.apksize.tasks
 
 import com.gi.apksize.models.AnalyzerOptions
 import com.gi.apksize.models.ApkStats
-import com.gi.apksize.processors.ApkFileProcessor
-import com.gi.apksize.processors.DiffProcessor
 import com.gi.apksize.ui.DiffHtmlGenerator
 import com.gi.apksize.ui.HtmlGenerator
-import com.gi.apksize.ui.PdfGenerator
-import org.jetbrains.kotlin.util.removeSuffixIfPresent
+import com.gi.apksize.utils.compareHolder
+import com.gi.apksize.utils.primaryHolder
+//import com.gi.apksize.ui.PdfGenerator
 import java.io.File
 
 object ApkSizeTask {
 
     fun evaluate(analyzerOptions: AnalyzerOptions) {
-        val proguardFilePath = if (analyzerOptions.inputFileProguardPath.isBlank())
-            null
-        else analyzerOptions.getPath(analyzerOptions.inputFileProguardPath)
-        val releaseApkPath = analyzerOptions.getPath(analyzerOptions.inputFilePath)
-        val outputDirectory = if (analyzerOptions.isDiffMode) {
-            analyzerOptions.getPath(analyzerOptions.outputFolderPath)
-                .removeSuffixIfPresent("/") + "/diffs/"
-        } else {
-            analyzerOptions.getPath(analyzerOptions.outputFolderPath)
-        }
-
-        val releaseApkFile = File(releaseApkPath)
-        val outputFolder = File(outputDirectory)
-        val proguardMappingFile = if (proguardFilePath.isNullOrBlank()) null else File(proguardFilePath)
-        if (!releaseApkFile.exists()) {
-            throw Exception("Apk file does not exists on $releaseApkPath. Are you sure you are using relative/absolute paths correctly?")
-        }
-        if (!outputFolder.exists()) {
-            outputFolder.mkdirs()
-        }
         val apkStats = if (!analyzerOptions.isDiffMode) {
-            ApkFileProcessor.apkStudioAnalyzerTools(releaseApkFile, proguardMappingFile, analyzerOptions)
+            val dataHolder = analyzerOptions.primaryHolder()
+            SingleStatsTask.apkStudioAnalyzerTools(dataHolder)
         } else {
-            diffTask(analyzerOptions, releaseApkFile, proguardMappingFile)
+            diffTask(analyzerOptions)
         }
         apkStats.apkName = analyzerOptions.appName
         writeApkStatsToJsonFile(apkStats, outputFolder)
@@ -47,25 +27,9 @@ object ApkSizeTask {
         }
     }
 
-    private fun diffTask(
-        analyzerOptions: AnalyzerOptions,
-        releaseApkFile: File,
-        proguardMappingFile: File?
-    ): ApkStats {
-        val compareProguardFilePath = if (analyzerOptions.compareFileProguardPath.isBlank())
-            null
-        else analyzerOptions.getPath(analyzerOptions.compareFileProguardPath)
-        val compareApkPath = analyzerOptions.getPath(analyzerOptions.compareFilePath)
-        val compareApkFile = File(compareApkPath)
-        val compareProguardMappingFile =
-            if (compareProguardFilePath.isNullOrBlank()) null else File(compareProguardFilePath)
-        if (!compareApkFile.exists()) {
-            throw Exception("Apk file does not exists on $compareApkPath. Are you sure you are using relative/absolute paths correctly?")
-        }
-        return DiffProcessor.calculate(
-            releaseApkFile, proguardMappingFile,
-            compareApkFile, compareProguardMappingFile, analyzerOptions
-        )
+    private fun diffTask(analyzerOptions: AnalyzerOptions): ApkStats {
+        val dataHolder = analyzerOptions.compareHolder()
+        return CompareTask.calculate(dataHolder)
     }
 
     private fun writeAaptStatsToJsonFile(apkStats: ApkStats, outputFolder: File) {
@@ -112,7 +76,7 @@ object ApkSizeTask {
             apkSizeReportFile.delete()
             apkSizeReportFile.createNewFile()
         }
-        PdfGenerator.generate(html, apkSizeReportFile)
+//        PdfGenerator.generate(html, apkSizeReportFile)
     }
 
 }

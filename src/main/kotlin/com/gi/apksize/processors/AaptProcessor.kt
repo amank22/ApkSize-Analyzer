@@ -2,14 +2,19 @@ package com.gi.apksize.processors
 
 import com.gi.apksize.models.AnalyzerOptions
 import com.gi.apksize.models.ApkStats
+import com.gi.apksize.models.DataHolder
+import com.gi.apksize.utils.Printer
 import java.io.BufferedReader
 import java.io.File
 import java.io.InputStreamReader
 import java.lang.StringBuilder
 
-object AaptProcessor {
+class AaptProcessor : SimpleProcessor() {
 
-    fun process(releaseApkFile: File, apkStats: ApkStats, analyzerOptions: AnalyzerOptions) {
+    private var completionStatus : Int = 1 // 0 is success, 1 is failed
+
+    private fun process(releaseApkFile: File, apkStats: ApkStats, analyzerOptions: AnalyzerOptions) {
+        completionStatus = 1
         try {
             val aapt2Path = analyzerOptions.aapt2Executor
             if (aapt2Path.isBlank()) return
@@ -29,22 +34,40 @@ object AaptProcessor {
                         map[type] = count
                     }
                 } catch (e : Exception) {
-                    println(e.message)
+                    Printer.log(e.message)
                 }
                 builder.appendLine(it)
             }
             val exitVal = pr.waitFor()
-            println("Aapt Exited with error code $exitVal")
+            completionStatus = exitVal
+            if (exitVal == 0) {
+                Printer.log("Resources processing done")
+            } else {
+                Printer.log("Resources processing failed")
+            }
             val completeText = builder.toString()
-            if (!completeText.isBlank()) {
+            if (completeText.isNotBlank()) {
                 apkStats.aaptData = completeText
             }
             if (map.isNotEmpty()) {
                 apkStats.resourcesMap = map
             }
-        } catch (e: java.lang.Exception) {
-            println(e.toString())
-            e.printStackTrace()
+        } catch (e: Exception) {
+            Printer.log(e)
+        }
+    }
+
+    override fun process(dataHolder: DataHolder, apkStats: ApkStats) {
+        process(dataHolder.primaryFile.file, apkStats, dataHolder.analyzerOptions)
+    }
+
+    override val name: String = "Resources"
+
+    override fun postMsg(): String {
+        return if (completionStatus == 0) {
+            "Resources processing done"
+        } else {
+            "Resources processing failed"
         }
     }
 

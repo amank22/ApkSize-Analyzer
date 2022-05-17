@@ -1,22 +1,23 @@
 import com.gi.apksize.models.AnalyzerOptions
 import com.gi.apksize.tasks.ApkSizeTask
+import com.gi.apksize.utils.Printer
 import com.google.gson.Gson
 import java.io.File
 
 fun main(args: Array<String>) {
-    println("Analysing apk!")
+    Printer.log("Analysing apk!")
     var analyzerOptions = AnalyzerOptions()
 
     val absOrRelative = args[0]
     if (absOrRelative != "abs" && absOrRelative != "relative") {
-        println("First argument should be abs or relative. Relates to the path to look for.")
+        Printer.log("First argument should be abs or relative. Relates to the path to look for.")
         return
     }
     val isAbsolutePaths = absOrRelative == "abs"
 
     val secondArgument = args.getOrNull(1)
     if (secondArgument == null) {
-        println("Pass the --config file path or separate arguments")
+        Printer.log("Pass the --config file path or separate arguments")
         return
     }
     if (secondArgument.startsWith("--config=")) {
@@ -27,44 +28,45 @@ fun main(args: Array<String>) {
             try {
                 analyzerOptions = Gson().fromJson(configString, AnalyzerOptions::class.java)
                 if (analyzerOptions == null) {
-                    println("Config file should not be empty")
+                    Printer.log("Config file should not be empty")
                     return
                 }
             } catch (e: Exception) {
-                println("Error reading config file : ${e.localizedMessage}")
+                Printer.log("Error reading config file : ${e.localizedMessage}")
                 return
             }
         } else {
-            println("Config file does not exists or can't be read")
+            Printer.log("Config file does not exists or can't be read")
             return
         }
     } else {
 
         val input = args[1]
         if (input.isBlank()) {
-            println("Input should not be empty")
+            Printer.log("Input should not be empty")
             return
         }
-        analyzerOptions.inputFilePath = input
+        analyzerOptions = analyzerOptions.copy(inputFilePath = input)
         val output = args[2]
         if (output.isBlank()) {
-            println("Output should not be empty")
+            Printer.log("Output should not be empty")
             return
         }
-        analyzerOptions.outputFolderPath = output
+        analyzerOptions = analyzerOptions.copy(outputFolderPath = output)
         var proguard = args.elementAtOrNull(3)
         if (proguard?.startsWith("--") == true) {
             proguard = null
         }
-        analyzerOptions.inputFileProguardPath = proguard ?: ""
-        updateOptions(args, analyzerOptions)
+        analyzerOptions = analyzerOptions.copy(inputFileProguardPath = proguard ?: "")
+        analyzerOptions = updateOptions(args, analyzerOptions)
     }
-    analyzerOptions.arePathsAbsolute = isAbsolutePaths
+    analyzerOptions = analyzerOptions.copy(arePathsAbsolute = isAbsolutePaths)
     ApkSizeTask.evaluate(analyzerOptions)
-    println("Analysed apk. You can find the files the output files at ${analyzerOptions.outputFolderPath}.")
+    Printer.log("Analysed apk. You can find the files the output files at ${analyzerOptions.outputFolderPath}.")
 }
 
-fun updateOptions(args: Array<String>, analyzerOptions: AnalyzerOptions) {
+fun updateOptions(args: Array<String>, analyzerOptions: AnalyzerOptions): AnalyzerOptions {
+    var options = analyzerOptions
     args.forEach {
         if (!it.startsWith("--") && !it.contains("=")) return@forEach
         val optionsSplit = it.split("=")
@@ -72,41 +74,42 @@ fun updateOptions(args: Array<String>, analyzerOptions: AnalyzerOptions) {
         val optionValue = optionsSplit[1]
         when (optionKey) {
             "--appName" -> {
-                analyzerOptions.appName = optionValue
+                options = options.copy(appName = optionValue)
             }
             "--generatePdfReport" -> {
-                analyzerOptions.generatePdfReport = optionValue != "false"
+                options = options.copy(generatePdfReport = optionValue != "false")
             }
             "--generateHtmlReport" -> {
-                analyzerOptions.generateHtmlReport = optionValue != "false"
+                options = options.copy(generateHtmlReport = optionValue != "false")
             }
             "--topFilesImagesSizeLimiter" -> {
-                analyzerOptions.topFilesImagesSizeLimiter = optionValue.toLong()
+                options = options.copy(topFilesImagesSizeLimiter = optionValue.toLong())
             }
             "--filteredFilesSizeLimiter" -> {
-                analyzerOptions.filteredFilesSizeLimiter = optionValue.toLong()
+                options = options.copy(filteredFilesSizeLimiter = optionValue.toLong())
             }
             "--dexPackagesSizeLimiter" -> {
-                analyzerOptions.dexPackagesSizeLimiter = optionValue.toLong()
+                options = options.copy(dexPackagesSizeLimiter = optionValue.toLong())
             }
             "--aapt2Executor" -> {
-                analyzerOptions.aapt2Executor = optionValue
+                options = options.copy(aapt2Executor = optionValue)
             }
             "--filesListMaxCount" -> {
-                analyzerOptions.filesListMaxCount = optionValue.toInt()
+                options = options.copy(filesListMaxCount = optionValue.toInt())
             }
             "--dexPackagesMinDepth" -> {
-                analyzerOptions.dexPackagesMinDepth = optionValue.toInt()
+                options = options.copy(dexPackagesMinDepth = optionValue.toInt())
             }
             "--appPackagesMaxCount" -> {
-                analyzerOptions.appPackagesMaxCount = optionValue.toInt()
+                options = options.copy(appPackagesMaxCount = optionValue.toInt())
             }
             "--dexPackagesMaxCount" -> {
-                analyzerOptions.dexPackagesMaxCount = optionValue.toInt()
+                options = options.copy(dexPackagesMaxCount = optionValue.toInt())
             }
             "--appPackagePrefix" -> {
-                analyzerOptions.appPackagePrefix = optionValue
+                options = options.copy(appPackagePrefix = optionValue)
             }
         }
     }
+    return options
 }

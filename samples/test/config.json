@@ -1,0 +1,20 @@
+{
+  "inputFilePath":"/samples/test/kotlin15/mobile-build-release.apk",
+  "inputFileProguardPath":"/samples/test/kotlin15/mapping.txt",
+  "outputFolderPath":"/samples/test/outputs/",
+  "appName":"Goibibo",
+  "appPackagePrefix":"com.goibibo",
+  "topFilesImagesSizeLimiter":10240,
+  "filteredFilesSizeLimiter":5000,
+  "filesListMaxCount":50,
+  "dexPackagesMinDepth":2,
+  "appPackagesMaxCount":20,
+  "dexPackagesMaxCount":100,
+  "dexPackagesSizeLimiter":5000,
+  "isDiffMode":false,
+  "compareFilePath":"/samples/test/12-4/mobile-build-release.apk",
+  "compareFileProguardPath":"/samples/test/12-4/mapping.txt",
+  "diffSizeLimiter":5000,
+  "disableFileByFileComparison":false,
+  "aapt2Executor":"/Users/aman.kapoor/Library/Android/sdk/build-tools/30.0.3/aapt2"
+}

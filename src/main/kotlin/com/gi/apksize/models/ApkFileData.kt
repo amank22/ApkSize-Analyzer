@@ -1,8 +1,7 @@
 package com.gi.apksize.models
 
-import com.gi.apksize.processors.ApkFileProcessor
 import com.gi.apksize.utils.ApkSizeHelpers
-import com.google.gson.annotations.Expose
+import com.gi.apksize.utils.Constants
 
 data class ApkFileData(
     val name: String,
@@ -31,7 +30,7 @@ class ApkGroupSizes {
         if (subGroups?.size == 1) {
             val s = subGroups?.values?.elementAt(0)?.size ?: 0
             groupSize = s
-            groupSizeMb = ApkSizeHelpers.roundOffDecimal(s / ApkFileProcessor.BYTE_TO_MB_DIVIDER)
+            groupSizeMb = ApkSizeHelpers.roundOffDecimal(s / Constants.BYTE_TO_MB_DIVIDER)
             subGroups = null
             return
         }
@@ -40,7 +39,7 @@ class ApkGroupSizes {
             size += it.value.size
         }
         groupSize = size
-        groupSizeMb = ApkSizeHelpers.roundOffDecimal(size / ApkFileProcessor.BYTE_TO_MB_DIVIDER)
+        groupSizeMb = ApkSizeHelpers.roundOffDecimal(size / Constants.BYTE_TO_MB_DIVIDER)
     }
 
 }

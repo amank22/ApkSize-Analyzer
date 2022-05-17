@@ -48,3 +48,4 @@ out/
 ## OS X
 ##############################
 .DS_Store
+/samples/test/

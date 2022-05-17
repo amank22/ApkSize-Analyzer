@@ -8,28 +8,26 @@ import com.android.tools.apk.analyzer.dex.tree.DexElementNode
 import com.android.tools.apk.analyzer.dex.tree.DexPackageNode
 import com.android.tools.proguard.ProguardMap
 import com.android.utils.ILogger
-import com.gi.apksize.models.AnalyzerOptions
-import com.gi.apksize.models.ApkStats
-import com.gi.apksize.models.DexPackageModel
-import com.intellij.util.containers.SortedList
-import org.jetbrains.kotlin.utils.addToStdlib.sumByLong
+import com.gi.apksize.models.*
+import com.gi.apksize.utils.Constants
+import com.gi.apksize.utils.Printer
 import org.jf.dexlib2.dexbacked.DexBackedDexFile
 import java.io.File
 import java.nio.file.Path
 import javax.swing.tree.TreeModel
+import kotlin.io.path.copyTo
+import kotlin.io.path.deleteIfExists
 
-object DexFileProcessor {
+class DexFileProcessor(private val dexProcessorHolder: DexProcessorHolder) : SimpleProcessor() {
 
     /**
      * Calculates stats in the dex files (java/kotlin code) with sizes & other things.
      */
-    fun calculateDexStats(
+    private fun calculateDexStats(
         apk: Path,
         apkStats: ApkStats,
         proguardMappingFile: File?,
-        analyzerOptions: AnalyzerOptions,
-        isCompareFile: Boolean = false,
-        needAppPackages: Boolean = true
+        analyzerOptions: AnalyzerOptions
     ) {
         val arch = Archives.open(apk, CustomLogger())
         arch.use {
@@ -38,41 +36,41 @@ object DexFileProcessor {
                 .filter { it.data.summaryDisplayString.endsWith(".dex") }.map {
                     it.data.path
                 }.toList()
-            println("No. of Dex Files: ${dexFilePaths.size}")
+            Printer.log("No. of Dex Files: ${dexFilePaths.size}")
             val dexBackedDexList = mutableListOf<DexBackedDexFile>()
-            val dexPackagesList = SortedList<DexPackageModel> { t, t2 ->
-                t2.basePackageSize.compareTo(t.basePackageSize)
-            }
+            val dexPackagesList = mutableListOf<DexPackageModel>()
             dexFilePaths.forEach {
                 val dexFile = DexFiles.getDexFile(it)
                 dexBackedDexList.add(dexFile)
-                println("Dex File: ${it.fileName}")
+                Printer.log("Dex File: ${it.fileName}")
                 generateDexPackageModel(proguardMappingFile, dexFile, dexPackagesList, analyzerOptions)
+                Printer.log("Processed Dex File: ${it.fileName}")
             }
+            Printer.log("Processed All Dex Files")
             val uniquePackagesMap = dexPackagesList.groupBy { it.basePackage }
 
             val uniquePackageList = uniquePackagesMap.map {
                 val list = it.value
                 val item = list[0]
                 if (list.size > 1) {
-                    val size = list.sumByLong { i -> i.basePackageSize }
+                    val size = list.sumOf { i -> i.basePackageSize }
                     item.basePackageSize = size
                 }
-                item.packageSizeKb = item.basePackageSize / ApkFileProcessor.BYTE_TO_KB_DIVIDER
+                item.packageSizeKb = item.basePackageSize / Constants.BYTE_TO_KB_DIVIDER
                 item
-            }.filterNot { it.depth <= analyzerOptions.dexPackagesMinDepth }
+            }.filterNot { it.depth <= analyzerOptions.dexPackagesMinDepth }.sortedByDescending { it.basePackageSize }
             val appPackages = uniquePackageList.filter { it.basePackage.startsWith(analyzerOptions.appPackagePrefix) }
                 .take(analyzerOptions.appPackagesMaxCount)
             val dexStats = DexFileStats.create(dexBackedDexList)
-            if (!isCompareFile) {
+            if (!dexProcessorHolder.isCompareFile) {
                 apkStats.dexStats = dexStats
                 apkStats.dexPackages = uniquePackageList.take(analyzerOptions.dexPackagesMaxCount)
-                if (needAppPackages)
+                if (dexProcessorHolder.needAppPackages)
                     apkStats.appPackages = appPackages
             } else {
                 apkStats.comparedDexStats = dexStats
                 apkStats.comparedDexPackages = uniquePackageList.take(analyzerOptions.dexPackagesMaxCount)
-                if (needAppPackages)
+                if (dexProcessorHolder.needAppPackages)
                     apkStats.comparedAppPackages = appPackages
             }
         }
@@ -139,21 +137,38 @@ object DexFileProcessor {
 
     class CustomLogger : ILogger {
         override fun error(t: Throwable?, msgFormat: String?, vararg args: Any?) {
-            println("Error: $msgFormat")
+            Printer.log("Error: $msgFormat")
         }
 
         override fun warning(msgFormat: String?, vararg args: Any?) {
-            println("Warning: $msgFormat")
+            Printer.log("Warning: $msgFormat")
         }
 
         override fun info(msgFormat: String?, vararg args: Any?) {
-            println("Info: $msgFormat")
+            Printer.log("Info: $msgFormat")
         }
 
         override fun verbose(msgFormat: String?, vararg args: Any?) {
-            println("Verbose: $msgFormat")
+            Printer.log("Verbose: $msgFormat")
         }
 
+    }
+
+    override val name: String = "Dex Files"
+
+    override fun process(dataHolder: DataHolder, apkStats: ApkStats) {
+        val analyzerOptions = dataHolder.analyzerOptions
+        val primaryFile = dataHolder.primaryFile.file
+        val apk = primaryFile.toPath()
+        val separator: String = File.pathSeparator
+        val copyPath = Path.of(
+            dataHolder.outputDir.absolutePath + separator +
+                    primaryFile.nameWithoutExtension + "-dex" + primaryFile.extension
+        )
+        val copied = apk.copyTo(copyPath, true)
+        val proguardFile = dataHolder.primaryFile.proguardFile
+        calculateDexStats(copied, apkStats, proguardFile, analyzerOptions)
+        copied.deleteIfExists()
     }
 
 }
