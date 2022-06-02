@@ -229,7 +229,7 @@ object HtmlGenerator {
 
     private fun giveFormattedNumberText(number: Int?): String {
         return try {
-            NumberFormat.getNumberInstance(Locale("hi", "IN"))
+            NumberFormat.getNumberInstance(Locale.US)
                 .format(number)
         } catch (e: Exception) {
             "Unknown"
