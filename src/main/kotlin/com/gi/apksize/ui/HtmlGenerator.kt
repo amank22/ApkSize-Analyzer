@@ -7,7 +7,6 @@ import com.gi.apksize.models.DexPackageModel
 import org.celtric.kotlin.html.*
 import java.text.NumberFormat
 import java.util.*
-import kotlin.collections.HashMap
 
 object HtmlGenerator {
 
@@ -32,7 +31,7 @@ object HtmlGenerator {
     private fun body(apkStats: ApkStats): BlockElement {
         return body {
             section(classes = "section") {
-                header() + appName(apkStats) + apkFileSizeStats(apkStats)+
+                header() + appName(apkStats) + apkFileSizeStats(apkStats) +
                         apkResourcesStats(apkStats) +
                         apkDataColumns(apkStats) +
                         footerByAman()
@@ -44,7 +43,7 @@ object HtmlGenerator {
         return footer("footer") {
             div("content has-text-centered") {
                 p {
-                    strong("Apk Size Analyzer") + " by " + a("https://github.com/amank22/ApkSize-Analyzer"){
+                    strong("Apk Size Analyzer") + " by " + a("https://github.com/amank22/ApkSize-Analyzer") {
                         strong("@amank22")
                     }
                 }
@@ -60,7 +59,7 @@ object HtmlGenerator {
                 }
             }
         } else {
-            div {  }
+            div { }
         }
     }
 
@@ -136,7 +135,7 @@ object HtmlGenerator {
                     p(classes = "heading") {
                         "React Bundle Size"
                     } + p(classes = "title") {
-                        "${apkStats.reactBundleSizeInMb?:0} MB"
+                        "${apkStats.reactBundleSizeInMb ?: 0} MB"
                     }
                 }
             } + div(classes = "column is-narrow has-text-centered") {
@@ -168,7 +167,7 @@ object HtmlGenerator {
     }
 
     private fun apkResourcesStats(apkStats: ApkStats): BlockElement {
-        val resourceMap = apkStats.resourcesMap?: return div {  }
+        val resourceMap = apkStats.resourcesMap ?: return div { }
         val nav = nav(classes = "columns is-mobile is-centered is-multiline pt-3") {
             div(classes = "column is-narrow has-text-centered") {
                 div {
@@ -229,9 +228,9 @@ object HtmlGenerator {
 
     private fun giveFormattedNumberText(number: Int?): String {
         return try {
-            NumberFormat.getNumberInstance(Locale("hi", "IN"))
+            NumberFormat.getNumberInstance(Locale.ENGLISH)
                 .format(number)
-        } catch (e: Exception) {
+        } catch (e: NumberFormatException) {
             "Unknown"
         }
     }
