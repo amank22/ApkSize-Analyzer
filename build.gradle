@@ -5,6 +5,7 @@ buildscript {
 }
 
 plugins {
+    id 'application'
     id 'org.jetbrains.kotlin.jvm' version '1.5.0'
     id 'java-library'
     id 'com.github.johnrengelman.shadow' version '7.0.0'
@@ -27,7 +28,7 @@ repositories {
 dependencies {
     implementation platform('org.jetbrains.kotlin:kotlin-bom')
     implementation 'org.jetbrains.kotlin:kotlin-stdlib-jdk8'
-    implementation 'com.google.code.gson:gson:2.8.6'
+    implementation 'com.google.code.gson:gson:2.9.0'
     implementation "com.android.tools:common:$androidToolsVersion"
     implementation "com.android.tools.apkparser:apkanalyzer:$androidToolsVersion"
     implementation group: 'org.smali', name: 'dexlib2', version: '2.2.4'
@@ -38,14 +39,26 @@ dependencies {
 
     testImplementation 'org.jetbrains.kotlin:kotlin-test-junit'
 
-    r8 'com.android.tools:r8:2.2.64'
+    r8 'com.android.tools:r8:3.3.28'
 }
 compileKotlin {
-    kotlinOptions.jvmTarget = '1.8'
+    def compilerArgs = ["-Xopt-in=kotlin.RequiresOptIn", "-opt-in=kotlin.RequiresOptIn"]
+    kotlinOptions {
+        jvmTarget = '1.8'
+        freeCompilerArgs += compilerArgs
+    }
 }
-//application {
-//    mainClassName = 'MainKt'
-//}
+tasks.withType(org.jetbrains.kotlin.gradle.tasks.KotlinCompile).configureEach {
+    kotlinOptions {
+        freeCompilerArgs += "-opt-in=kotlin.RequiresOptIn"
+    }
+}
+kotlin.sourceSets.all {
+    languageSettings.useExperimentalAnnotation("kotlin.RequiresOptIn")
+}
+application {
+    mainClassName = 'MainKt'
+}
 
 shadowJar {
     zip64 true

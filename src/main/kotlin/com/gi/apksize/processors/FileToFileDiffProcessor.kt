@@ -5,6 +5,7 @@ import com.android.tools.apk.analyzer.internal.ApkFileByFileDiffParser
 import com.android.tools.apk.analyzer.internal.ApkFileByFileEntry
 import com.gi.apksize.models.AnalyzerOptions
 import com.gi.apksize.models.ApkStats
+import com.gi.apksize.models.DataHolder
 import com.gi.apksize.models.FileByFileSizeDiffModel
 import com.gi.apksize.utils.Constants
 import com.gi.apksize.utils.Printer
@@ -16,7 +17,11 @@ import kotlin.time.measureTimedValue
 object FileToFileDiffProcessor {
 
     @OptIn(ExperimentalTime::class)
-    fun diff(apk: Path, apk2: Path, analyzerOptions: AnalyzerOptions, apkStats: ApkStats) {
+    fun diff(dataHolder: DataHolder, apkStats: ApkStats) {
+        val analyzerOptions = dataHolder.analyzerOptions
+        if (analyzerOptions.disableFileByFileComparison) return
+        val apk = dataHolder.primaryFile.file.toPath()
+        val apk2 = dataHolder.secondaryFile?.file?.toPath()
         val list = mutableListOf<FileByFileSizeDiffModel>()
         val customLogger = DexFileProcessor.CustomLogger()
         val arch = Archives.open(apk, customLogger)

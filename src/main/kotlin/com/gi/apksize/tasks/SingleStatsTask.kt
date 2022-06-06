@@ -28,6 +28,7 @@ object SingleStatsTask : Task {
         }
 
         processors.forEach { listOfProcess ->
+            Printer.log("listOfProcess = " + listOfProcess.size)
             pool.submit {
                 listOfProcess.forEach { process ->
                     Printer.log(process.preMsg())
@@ -38,9 +39,11 @@ object SingleStatsTask : Task {
                     }.onSuccess {
                         Printer.log(process.postMsg())
                     }
+                    Printer.log("process = ${process.name} done")
                 }
             }
         }
+        pool.shutdown() // Without this termination gets stuck
         try {
             pool.awaitTermination(analyzerOptions.executionTimeOut, TimeUnit.MINUTES)
         } catch (e: InterruptedException) {

@@ -1,12 +1,18 @@
+@file:Suppress("NOTHING_TO_INLINE")
+
 package com.gi.apksize.utils
 
 object Printer {
 
-    fun log(message: Any?) {
+    inline fun log(message: Any?) {
         println(message)
     }
 
-    fun log(throwable: Throwable?) {
+    inline fun error(message: Any?) {
+        kotlin.error(message?:"")
+    }
+
+    inline fun log(throwable: Throwable?) {
         println(throwable)
     }
 

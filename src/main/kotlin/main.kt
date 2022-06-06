@@ -7,7 +7,10 @@ import java.io.File
 fun main(args: Array<String>) {
     Printer.log("Analysing apk!")
     var analyzerOptions = AnalyzerOptions()
-
+    if (args.isEmpty()) {
+        Printer.error("Pass arguments to run the program")
+        return
+    }
     val absOrRelative = args[0]
     if (absOrRelative != "abs" && absOrRelative != "relative") {
         Printer.log("First argument should be abs or relative. Relates to the path to look for.")
