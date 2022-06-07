@@ -42,19 +42,11 @@ dependencies {
     r8 'com.android.tools:r8:3.3.28'
 }
 compileKotlin {
-    def compilerArgs = ["-Xopt-in=kotlin.RequiresOptIn", "-opt-in=kotlin.RequiresOptIn"]
+    def compilerArgs = ["-Xopt-in=kotlin.RequiresOptIn"]
     kotlinOptions {
         jvmTarget = '1.8'
         freeCompilerArgs += compilerArgs
     }
-}
-tasks.withType(org.jetbrains.kotlin.gradle.tasks.KotlinCompile).configureEach {
-    kotlinOptions {
-        freeCompilerArgs += "-opt-in=kotlin.RequiresOptIn"
-    }
-}
-kotlin.sourceSets.all {
-    languageSettings.useExperimentalAnnotation("kotlin.RequiresOptIn")
 }
 application {
     mainClassName = 'MainKt'
