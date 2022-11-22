@@ -1,6 +1,5 @@
 buildscript {
     repositories {
-        jcenter()
         maven { url "https://plugins.gradle.org/m2/" }
     }
     dependencies {
@@ -20,16 +19,21 @@ version = '0.2-beta'
 
 repositories {
     google()
-    jcenter()
     mavenCentral()
+    maven { url 'https://jitpack.io' }
 }
 dependencies {
-    implementation 'com.google.code.gson:gson:2.8.6'
-    implementation group: 'com.android.tools.apkparser', name: 'apkanalyzer', version: '27.1.1'
-    implementation 'org.celtric.kotlin:kotlin-html:0.1.4'
+    implementation 'com.google.code.gson:gson:2.10'
+    // https://mvnrepository.com/artifact/com.android.tools.apkparser/apkanalyzer
+    implementation 'com.android.tools.apkparser:apkanalyzer:30.3.1'
+//    implementation 'org.celtric.kotlin:kotlin-html:0.1.4'
     implementation group: 'com.openhtmltopdf', name: 'openhtmltopdf-pdfbox', version: '1.0.4'
-    implementation group: 'com.google.archivepatcher', name: 'archive-patch-generator', version: '1.0.4'
-    implementation group: 'com.google.archivepatcher', name: 'archive-patch-explainer', version: '1.0.4'
+//    implementation group: 'com.google.archivepatcher', name: 'archive-patch-generator', version: '1.0.4'
+//    implementation group: 'com.google.archivepatcher', name: 'archive-patch-explainer', version: '1.0.4'
+
+    // https://jitpack.io/#andrewhayden/archive-patcher/
+    implementation 'com.github.andrewhayden.archive-patcher:generator:1.1'
+    implementation 'com.github.andrewhayden.archive-patcher:explainer:1.1'
 
     testImplementation 'org.jetbrains.kotlin:kotlin-test-junit'
 }
