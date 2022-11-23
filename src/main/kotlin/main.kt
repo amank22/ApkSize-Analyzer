@@ -110,7 +110,7 @@ fun updateOptions(args: Array<String>, analyzerOptions: AnalyzerOptions): Analyz
                 options = options.copy(dexPackagesMaxCount = optionValue.toInt())
             }
             "--appPackagePrefix" -> {
-                options = options.copy(appPackagePrefix = optionValue)
+                options = options.copy(appPackagePrefix = listOf(optionValue))
             }
         }
     }

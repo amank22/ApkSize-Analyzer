@@ -45,8 +45,8 @@ class ApkGeneralFileProcessor : SimpleProcessor() {
                     fileTypesData[subtype] = arrayListOf()
                 }
                 fileTypesData[subtype]?.add(apkFileData)
-                topFilesList.add(apkFileData)
                 val imageFile = isImageFile(apkFileData)
+                topFilesList.add(apkFileData)
                 if (imageFile) {
                     topImagesList.add(apkFileData)
                 }
@@ -68,14 +68,14 @@ class ApkGeneralFileProcessor : SimpleProcessor() {
         }
         val filteredSizes = hashMapOf<String, ApkGroupSizes>()
         fileTypeSizes.forEach {
-            if (it.value.groupSize ?: 0L >= analyzerOptions.filteredFilesSizeLimiter) {
+            if ((it.value.groupSize ?: 0L) >= analyzerOptions.filteredFilesSizeLimiter) {
                 filteredSizes[it.key] = it.value
             }
         }
         val sublistMaxCount = analyzerOptions.filesListMaxCount
-        apkStats.topFiles = topFilesList.sortedByDescending { it.sizeInBytes }.takeLast(sublistMaxCount)
-        apkStats.topFilteredFiles = topFilesFilteredList.sortedByDescending { it.sizeInBytes }.takeLast(sublistMaxCount)
-        apkStats.topImages = topImagesList.sortedByDescending { it.sizeInBytes }.takeLast(sublistMaxCount)
+        apkStats.topFiles = topFilesList.sortedByDescending { it.sizeInBytes }.take(sublistMaxCount)
+        apkStats.topFilteredFiles = topFilesFilteredList.sortedByDescending { it.sizeInBytes }.take(sublistMaxCount)
+        apkStats.topImages = topImagesList.sortedByDescending { it.sizeInBytes }.take(sublistMaxCount)
         apkStats.fileStats = fileTypesData
         apkStats.groupSizes = filteredSizes
     }
@@ -83,18 +83,19 @@ class ApkGeneralFileProcessor : SimpleProcessor() {
     /**
      * Checks if the name is of an image file according to the extension.
      * Used some common extensions like jpg, webp, png.
-     * These only account for the rasterize images and not vector.
      */
     private fun isImageFile(apkFileData: ApkFileData): Boolean {
         if (!apkFileData.simpleFileName.contains(".")) return false
         val simpleFileName = apkFileData.simpleFileName.split(".")[1]
-        return simpleFileName == "png" || simpleFileName == "jpg" || simpleFileName == "jpeg" || simpleFileName == "webp"
+        val isDrawable = apkFileData.fileType.fileSubType.contains("drawable")
+        return isDrawable || simpleFileName == "png" || simpleFileName == "jpg" || simpleFileName == "jpeg" || simpleFileName == "webp"
     }
 
     /**
      * Checks if file is not some common files in the apk like dex, arsc, static library
      */
     private fun isFilteredFile(apkFileData: ApkFileData): Boolean {
+        if (isImageFile(apkFileData)) return false
         val fileName = apkFileData.name
         if (fileName.startsWith("lib")) return false
         if (fileName.endsWith(".dex")) return false

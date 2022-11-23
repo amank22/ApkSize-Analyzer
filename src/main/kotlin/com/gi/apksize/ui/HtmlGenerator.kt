@@ -5,8 +5,11 @@ import com.gi.apksize.models.ApkGroupSizes
 import com.gi.apksize.models.ApkStats
 import com.gi.apksize.models.DexPackageModel
 import org.celtric.kotlin.html.*
+import java.text.CharacterIterator
 import java.text.NumberFormat
+import java.text.StringCharacterIterator
 import java.util.*
+
 
 object HtmlGenerator {
 
@@ -65,11 +68,11 @@ object HtmlGenerator {
 
     private fun apkDataColumns(apkStats: ApkStats): BlockElement {
         val items = listOf(
-            "Biggest Images", "Top Packaged Files", "Dex Packages", "App Packages",
-            "Apk Group Sizes", "Top Filtered Files"
+            "Biggest Images", "Biggest other Files", "Dex Packages", "App Packages",
+            "Apk Group Sizes", "Top Packaged Files"
         )
         return columns {
-            val item3List = items.chunked(3)
+            val item3List = items.chunked(1)
             item3List.map { list ->
                 column {
                     list.map {
@@ -79,7 +82,7 @@ object HtmlGenerator {
                                 "Top Packaged Files" -> topGenericFilesPanel(apkStats.topFiles, it)
                                 "App Packages" -> dexPackagesPanel(apkStats.appPackages, it)
                                 "Dex Packages" -> dexPackagesPanel(apkStats.dexPackages, it)
-                                "Top Filtered Files" -> topGenericFilesPanel(apkStats.topFilteredFiles, it)
+                                "Biggest other Files" -> topGenericFilesPanel(apkStats.topFilteredFiles, it)
                                 "Apk Group Sizes" -> groupSizesPanel(apkStats.groupSizes, it)
                                 else -> div { }
                             }
@@ -91,13 +94,13 @@ object HtmlGenerator {
     }
 
     private fun columns(content: () -> Any): BlockElement {
-        return div("tile is-ancestor is-mobile m-6") {
+        return div("tile is-ancestor is-mobile mt-6") {
             content()
         }
     }
 
     private fun column(content: () -> Any): BlockElement {
-        return div("tile is-parent is-vertical is-6") {
+        return div("tile is-parent is-horizontal is-full") {
             content()
         }
     }
@@ -119,7 +122,7 @@ object HtmlGenerator {
                     p(classes = "heading") {
                         "Apk Raw Size"
                     } + p(classes = "title") {
-                        "${apkStats.apkSizeInMb} MB"
+                        humanReadableByteCountSI(apkStats.apkSize)
                     }
                 }
             } + div(classes = "column is-narrow has-text-centered") {
@@ -127,7 +130,7 @@ object HtmlGenerator {
                     p(classes = "heading") {
                         "Apk Download Size"
                     } + p(classes = "title") {
-                        "${apkStats.downloadSizeInMb} MB"
+                        humanReadableByteCountSI(apkStats.downloadSize)
                     }
                 }
             } + div(classes = "column is-narrow has-text-centered") {
@@ -135,7 +138,7 @@ object HtmlGenerator {
                     p(classes = "heading") {
                         "React Bundle Size"
                     } + p(classes = "title") {
-                        "${apkStats.reactBundleSizeInMb ?: 0} MB"
+                        humanReadableByteCountSI(apkStats.reactBundleSize)
                     }
                 }
             } + div(classes = "column is-narrow has-text-centered") {
@@ -268,15 +271,15 @@ object HtmlGenerator {
     private fun panelItemRow(apkFileData: ApkFileData): BlockElement {
         return div(classes = "panel-block") {
             div(classes = "container") {
-                p(classes = "title is-size-5 has-text-weight-light") {
-                    apkFileData.simpleFileName
-                } + p(classes = "subtitle has-text-danger") {
-                    "${apkFileData.sizeInKb} Kb"
+                span(classes = "tag is-info is-light is-hidden-mobile") {
+                    apkFileData.fileType.fileSubType
+                } +
+                        p(classes = "title is-size-5 has-text-weight-light") {
+                            apkFileData.simpleFileName
+                        } + p(classes = "subtitle has-text-danger") {
+                    humanReadableByteCountSI(apkFileData.sizeInBytes)
                 }
-            } +
-                    span(classes = "tag is-info is-light is-hidden-mobile") {
-                        apkFileData.fileType.fileSubType
-                    }
+            }
         }
     }
 
@@ -286,7 +289,7 @@ object HtmlGenerator {
                 p(classes = "title is-size-5 has-text-weight-light") {
                     dexPackage.basePackage
                 } + p(classes = "subtitle has-text-danger") {
-                    "${dexPackage.packageSizeKb} Kb"
+                    humanReadableByteCountSI(dexPackage.basePackageSize) // TODO:: Check whether this is correct or not
                 }
             }
         }
@@ -313,7 +316,7 @@ object HtmlGenerator {
                 p(classes = "title is-size-5 has-text-weight-light") {
                     groupName
                 } + p(classes = "subtitle has-text-danger") {
-                    "${group.groupSizeMb} MB"
+                    humanReadableByteCountSI(group.groupSize)
                 } + if (!group.subGroups.isNullOrEmpty()) {
                     div(classes = "mt-4") {
                         strong("Top SubGroups")
@@ -322,15 +325,29 @@ object HtmlGenerator {
                     div {}
                 } + div(classes = "content is-small") {
                     ul {
-                        group.subGroups?.map {
+                        group.subGroups.orEmpty().asIterable().sortedByDescending { it.value.size }.map {
                             li {
-                                text(it.key) + " (" + strong { "${it.value.sizeInKb} Kb" } + ")"
+                                text(it.key) + " (" + strong { humanReadableByteCountSI(it.value.size) } + ")"
                             }
-                        } ?: emptyList<String>().map { li {} }
+                        }
                     }
                 }
             }
         }
+    }
+
+    private fun humanReadableByteCountSI(bytes: Long?): String {
+        if (bytes == null) return "0 bytes"
+        var bytes1 = bytes
+        if (-1000 < bytes1 && bytes1 < 1000) {
+            return "$bytes1 B"
+        }
+        val ci: CharacterIterator = StringCharacterIterator("kMGTPE")
+        while (bytes1 <= -999950 || bytes1 >= 999950) {
+            bytes1 /= 1000
+            ci.next()
+        }
+        return String.format("%.1f %cB", bytes1 / 1000.0, ci.current())
     }
 
 }

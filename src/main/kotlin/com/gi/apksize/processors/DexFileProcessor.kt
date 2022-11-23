@@ -59,7 +59,7 @@ class DexFileProcessor(private val dexProcessorHolder: DexProcessorHolder) : Sim
                 item.packageSizeKb = item.basePackageSize / Constants.BYTE_TO_KB_DIVIDER
                 item
             }.filterNot { it.depth <= analyzerOptions.dexPackagesMinDepth }.sortedByDescending { it.basePackageSize }
-            val appPackages = uniquePackageList.filter { it.basePackage.startsWith(analyzerOptions.appPackagePrefix) }
+            val appPackages = uniquePackageList.filter { p -> analyzerOptions.appPackagePrefix.any { p.basePackage.startsWith(it) } }
                 .take(analyzerOptions.appPackagesMaxCount)
             val dexStats = DexFileStats.create(dexBackedDexList)
             if (!dexProcessorHolder.isCompareFile) {

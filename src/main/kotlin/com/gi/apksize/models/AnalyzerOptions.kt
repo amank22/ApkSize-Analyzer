@@ -62,11 +62,11 @@ data class AnalyzerOptions(
     //region dex constants
     /**
      * We classify few special packages (app related mostly) and show them as a separate item in the output json.
-     * This is just to filter out and see data for your our code.
+     * This is just to filter out and see data for your own code.
      * This checks if the package name starts with this prefix.
      * If you have any code other than this package, it might miss this filtering.
      */
-    val appPackagePrefix: String = "",
+    val appPackagePrefix: List<String> = listOf(""),
     /**
      * Every dex package & file we process has a depth to it.
      * Like com -> 1, com.goibibo -> 2, com.goibibo.hotels -> 3
@@ -164,7 +164,7 @@ data class AnalyzerOptions(
             path
         } else {
             val currentPath = System.getProperty("user.dir")
-            val separator = File.pathSeparator
+            val separator = File.separator
             val updatedPath = if (!path.startsWith(separator)) {
                 "$separator$path"
             } else {
