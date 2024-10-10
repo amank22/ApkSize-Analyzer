@@ -4,28 +4,41 @@ import com.android.tools.apk.analyzer.Archives
 import com.android.tools.apk.analyzer.internal.ApkFileByFileDiffParser
 import com.android.tools.apk.analyzer.internal.ApkFileByFileEntry
 import com.gi.apksize.models.AnalyzerOptions
+import com.gi.apksize.models.ApkStats
+import com.gi.apksize.models.DataHolder
 import com.gi.apksize.models.FileByFileSizeDiffModel
-import com.gi.apksize.processors.ApkFileProcessor.BYTE_TO_KB_DIVIDER
+import com.gi.apksize.utils.Constants
+import com.gi.apksize.utils.Printer
 import java.nio.file.Path
 import javax.swing.tree.DefaultMutableTreeNode
+import kotlin.time.ExperimentalTime
+import kotlin.time.measureTimedValue
 
 object FileToFileDiffProcessor {
 
-    fun diff(apk: Path, apk2: Path, analyzerOptions: AnalyzerOptions): List<FileByFileSizeDiffModel> {
+    @OptIn(ExperimentalTime::class)
+    fun diff(dataHolder: DataHolder, apkStats: ApkStats) {
+        val analyzerOptions = dataHolder.analyzerOptions
+        if (analyzerOptions.disableFileByFileComparison) return
+        val apk = dataHolder.primaryFile.file.toPath()
+        val apk2 = dataHolder.secondaryFile?.file?.toPath()
         val list = mutableListOf<FileByFileSizeDiffModel>()
-        val arch = Archives.open(apk, DexFileProcessor.CustomLogger())
+        val customLogger = DexFileProcessor.CustomLogger()
+        val arch = Archives.open(apk, customLogger)
         arch.use {
-            val arch2 = Archives.open(apk2, DexFileProcessor.CustomLogger())
+            val arch2 = Archives.open(apk2, customLogger)
             arch2.use { aContext2 ->
                 try {
-                    val diffTree = ApkFileByFileDiffParser.createTreeNode(it, aContext2)
-                    createNodes(diffTree, list, analyzerOptions)
+                    val diffTree = measureTimedValue {
+                        ApkFileByFileDiffParser.createTreeNode(it, aContext2)
+                    }
+                    createNodes(diffTree.value, list, analyzerOptions)
                 } catch (e: Throwable) {
-                    println(e)
+                    Printer.log(e)
                 }
             }
         }
-        return list.sortedByDescending { it.sizeDiff }
+        apkStats.fileDiffs = list.sortedByDescending { it.sizeDiff }
     }
 
     private fun createNodes(
@@ -37,8 +50,10 @@ object FileToFileDiffProcessor {
         val sizeDiffOfNode = entry.newSize - entry.oldSize
         if (sizeDiffOfNode > analyzerOptions.diffSizeLimiter) {
             val path = entry.path.toString()
-            val model = FileByFileSizeDiffModel(entry.name, entry.oldSize, entry.newSize,
-            sizeDiffOfNode, sizeDiffOfNode / BYTE_TO_KB_DIVIDER, path)
+            val model = FileByFileSizeDiffModel(
+                entry.name, entry.oldSize, entry.newSize,
+                sizeDiffOfNode, sizeDiffOfNode / Constants.BYTE_TO_KB_DIVIDER, path
+            )
             list.add(model)
         }
         val count = node.childCount

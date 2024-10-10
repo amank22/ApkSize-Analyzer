@@ -3,16 +3,16 @@ package com.gi.apksize.processors
 import com.android.tools.apk.analyzer.ApkSizeCalculator
 import com.gi.apksize.models.*
 import com.gi.apksize.utils.ApkSizeHelpers
-import com.intellij.util.containers.SortedList
+import com.gi.apksize.utils.Constants
 import java.nio.file.Path
 
-object ApkGeneralFileProcessor {
+class ApkGeneralFileProcessor : SimpleProcessor() {
 
     /**
      * Calculates file sizes of each and every file & filters them according to their type.
      * Also fills data for top images, top files, top filtered list etc
      */
-    fun calculatePerFileSize(
+    private fun calculatePerFileSize(
         apkStats: ApkStats,
         apkSizeCalculator: ApkSizeCalculator,
         apk: Path,
@@ -21,26 +21,20 @@ object ApkGeneralFileProcessor {
         val fileTypesData = HashMap<String, ArrayList<ApkFileData>>()
         val fileTypeSizes = hashMapOf<String, ApkGroupSizes>()
         val perFileSize = apkSizeCalculator.getDownloadSizePerFile(apk)
-        val topFilesList = SortedList<ApkFileData> { t, t2 ->
-            t2.sizeInBytes.compareTo(t.sizeInBytes)
-        }
-        val topFilesFilteredList = SortedList<ApkFileData> { t, t2 ->
-            t2.sizeInBytes.compareTo(t.sizeInBytes)
-        }
-        val topImagesList = SortedList<ApkFileData> { t, t2 ->
-            t2.sizeInBytes.compareTo(t.sizeInBytes)
-        }
+        val topFilesList = arrayListOf<ApkFileData>()
+        val topFilesFilteredList = arrayListOf<ApkFileData>()
+        val topImagesList = arrayListOf<ApkFileData>()
         perFileSize.forEach {
             val name = it.key.removePrefix("/")
             val sizeInBytes = it.value
-            val sizeInKb = sizeInBytes / ApkFileProcessor.BYTE_TO_KB_DIVIDER
+            val sizeInKb = sizeInBytes / Constants.BYTE_TO_KB_DIVIDER
             val type = fileTypeLookup(name)
             val apkFileData = ApkFileData(name, sizeInBytes, sizeInKb, type, type.simpleFileName!!)
             if (name == "assets/index.android.bundle") {
                 apkStats.reactBundleSize = sizeInBytes
                 apkStats.reactBundleSizeInMb = ApkSizeHelpers.roundOffDecimal(
                     sizeInBytes
-                            / ApkFileProcessor.BYTE_TO_MB_DIVIDER
+                            / Constants.BYTE_TO_MB_DIVIDER
                 )
             }
             type.simpleFileName = null
@@ -51,8 +45,8 @@ object ApkGeneralFileProcessor {
                     fileTypesData[subtype] = arrayListOf()
                 }
                 fileTypesData[subtype]?.add(apkFileData)
-                topFilesList.add(apkFileData)
                 val imageFile = isImageFile(apkFileData)
+                topFilesList.add(apkFileData)
                 if (imageFile) {
                     topImagesList.add(apkFileData)
                 }
@@ -66,7 +60,7 @@ object ApkGeneralFileProcessor {
             }
             val currentSubGroupSize = currentType?.subGroups?.get(subtype)?.size ?: 0L
             val updateSize = sizeInBytes + currentSubGroupSize
-            val updateSizeInKb = updateSize / ApkFileProcessor.BYTE_TO_KB_DIVIDER
+            val updateSizeInKb = updateSize / Constants.BYTE_TO_KB_DIVIDER
             fileTypeSizes[type.fileType]?.subGroups?.put(subtype, SizeModel(updateSize, updateSizeInKb))
         }
         fileTypeSizes.forEach {
@@ -74,18 +68,14 @@ object ApkGeneralFileProcessor {
         }
         val filteredSizes = hashMapOf<String, ApkGroupSizes>()
         fileTypeSizes.forEach {
-            if (it.value.groupSize ?: 0L >= analyzerOptions.filteredFilesSizeLimiter) {
+            if ((it.value.groupSize ?: 0L) >= analyzerOptions.filteredFilesSizeLimiter) {
                 filteredSizes[it.key] = it.value
             }
         }
         val sublistMaxCount = analyzerOptions.filesListMaxCount
-        apkStats.topFiles =
-            if (topFilesList.size > sublistMaxCount) topFilesList.subList(0, sublistMaxCount) else topFilesList
-        apkStats.topFilteredFiles =
-            if (topFilesFilteredList.size > sublistMaxCount) topFilesFilteredList.subList(0, sublistMaxCount)
-            else topFilesFilteredList
-        apkStats.topImages =
-            if (topImagesList.size > sublistMaxCount) topImagesList.subList(0, sublistMaxCount) else topImagesList
+        apkStats.topFiles = topFilesList.sortedByDescending { it.sizeInBytes }.take(sublistMaxCount)
+        apkStats.topFilteredFiles = topFilesFilteredList.sortedByDescending { it.sizeInBytes }.take(sublistMaxCount)
+        apkStats.topImages = topImagesList.sortedByDescending { it.sizeInBytes }.take(sublistMaxCount)
         apkStats.fileStats = fileTypesData
         apkStats.groupSizes = filteredSizes
     }
@@ -93,11 +83,19 @@ object ApkGeneralFileProcessor {
     /**
      * Checks if the name is of an image file according to the extension.
      * Used some common extensions like jpg, webp, png.
-     * These only account for the rasterize images and not vector.
      */
     private fun isImageFile(apkFileData: ApkFileData): Boolean {
-        if (!apkFileData.simpleFileName.contains(".")) return false
-        val simpleFileName = apkFileData.simpleFileName.split(".")[1]
+        val isDrawable = apkFileData.fileType.fileSubType.contains("drawable")
+        return isDrawable || isImageFile(apkFileData.simpleFileName)
+    }
+
+    /**
+     * Checks if the name is of an image file according to the extension.
+     * Used some common extensions like jpg, webp, png.
+     */
+    private fun isImageFile(fileName: String): Boolean {
+        if (!fileName.contains(".")) return false
+        val simpleFileName = fileName.split(".")[1]
         return simpleFileName == "png" || simpleFileName == "jpg" || simpleFileName == "jpeg" || simpleFileName == "webp"
     }
 
@@ -105,6 +103,7 @@ object ApkGeneralFileProcessor {
      * Checks if file is not some common files in the apk like dex, arsc, static library
      */
     private fun isFilteredFile(apkFileData: ApkFileData): Boolean {
+        if (isImageFile(apkFileData)) return false
         val fileName = apkFileData.name
         if (fileName.startsWith("lib")) return false
         if (fileName.endsWith(".dex")) return false
@@ -129,7 +128,12 @@ object ApkGeneralFileProcessor {
             return ApkFileType(fileType, singleName, fileType)
         }
         if (splitName.size == 2) {
-            return ApkFileType(fileType, splitName[1], fileType)
+            val localSubType = if (isImageFile(splitName[1])) {
+                "images"
+            } else {
+                fileType
+            }
+            return ApkFileType(fileType, splitName[1], localSubType)
         }
         if (splitName.size == 3) {
             val subtype = splitName[1]
@@ -179,6 +183,14 @@ object ApkGeneralFileProcessor {
                 "others"
             }
         }
+    }
+
+    override val name: String = "Top Files"
+
+    override fun process(dataHolder: DataHolder, apkStats: ApkStats) {
+        val apk = dataHolder.primaryFile.file.toPath()
+        val apkSizeCalculator = ApkSizeCalculator.getDefault()
+        calculatePerFileSize(apkStats, apkSizeCalculator, apk, dataHolder.analyzerOptions)
     }
 
 }

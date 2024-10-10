@@ -3,7 +3,7 @@ package com.gi.apksize.ui
 import com.gi.apksize.models.ApkStats
 import com.gi.apksize.models.DexPackageDiffModel
 import com.gi.apksize.models.FileByFileSizeDiffModel
-import com.gi.apksize.processors.ApkFileProcessor
+import com.gi.apksize.utils.Constants
 import org.celtric.kotlin.html.*
 import java.text.NumberFormat
 import java.util.*
@@ -231,9 +231,9 @@ object DiffHtmlGenerator {
                 } + p(classes = "subtitle ${getColorClassForSize(diffModel.sizeDiff)}") {
                     "${getSignedTextForNumber(diffModel.sizeDiffKb)} Kb"
                 } + p(classes = "is-medium has-text-grey is-italic has-text-weight-light") {
-                    "Old Size: ${diffModel.oldSize / ApkFileProcessor.BYTE_TO_KB_DIVIDER} Kb"
+                    "Old Size: ${diffModel.oldSize / Constants.BYTE_TO_KB_DIVIDER} Kb"
                 } + p(classes = "is-medium has-text-grey is-italic has-text-weight-light") {
-                    "New Size: ${diffModel.newSize / ApkFileProcessor.BYTE_TO_KB_DIVIDER} Kb"
+                    "New Size: ${diffModel.newSize / Constants.BYTE_TO_KB_DIVIDER} Kb"
                 } + p(classes = "is-medium has-text-grey is-italic has-text-weight-light") {
                     "Path: ${diffModel.path} Kb"
                 }

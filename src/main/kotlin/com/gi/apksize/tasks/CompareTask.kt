@@ -1,76 +1,44 @@
-package com.gi.apksize.processors
+package com.gi.apksize.tasks
 
-import com.android.tools.apk.analyzer.ApkSizeCalculator
-import com.gi.apksize.models.AnalyzerOptions
-import com.gi.apksize.models.ApkStats
-import com.gi.apksize.models.DexPackageDiffModel
-import com.gi.apksize.models.DexPackageModel
+import com.gi.apksize.models.*
+import com.gi.apksize.processors.BasicSizeProcessor
+import com.gi.apksize.processors.DexFileProcessor
+import com.gi.apksize.processors.FileToFileDiffProcessor
 import com.gi.apksize.utils.ApkSizeHelpers
-import java.io.File
-import java.nio.file.Path
+import com.gi.apksize.utils.Constants
 import kotlin.math.absoluteValue
 
-object DiffProcessor {
+object CompareTask : Task {
 
-    fun calculate(
-        releaseApkFile: File, proguardMappingFile: File?,
-        compareApkFile: File, compareProguardMappingFile: File?,
-        analyzerOptions: AnalyzerOptions
+    private fun calculate(
+        dataHolder: DataHolder
     ): ApkStats {
 
         val apkStats = ApkStats()
-        val apkPath = releaseApkFile.toPath()
-        val compareApkPath = compareApkFile.toPath()
-
-        if (!analyzerOptions.disableFileByFileComparison) {
-            apkStats.fileDiffs = FileToFileDiffProcessor.diff(
-                apkPath,
-                compareApkPath, analyzerOptions
-            )
-        }
-
-        calculateBaseSizes(apkStats, apkPath, compareApkPath)
-
-        calculateDexPackagesDiffs(
-            apkPath,
-            apkStats,
-            proguardMappingFile,
-            analyzerOptions,
-            compareApkPath,
-            compareProguardMappingFile
-        )
-
+        FileToFileDiffProcessor.diff(dataHolder, apkStats)
+        calculateBaseSizes(dataHolder, apkStats)
+        calculateDexPackagesDiffs(dataHolder, apkStats)
         return apkStats
     }
 
     private fun calculateDexPackagesDiffs(
-        apkPath: Path,
-        apkStats: ApkStats,
-        proguardMappingFile: File?,
-        analyzerOptions: AnalyzerOptions,
-        compareApkPath: Path,
-        compareProguardMappingFile: File?
+        dataHolder: DataHolder,
+        apkStats: ApkStats
     ) {
-        DexFileProcessor.calculateDexStats(
-            apkPath, apkStats, proguardMappingFile,
-            analyzerOptions, isCompareFile = false, needAppPackages = false
-        )
-        DexFileProcessor.calculateDexStats(
-            compareApkPath, apkStats,
-            compareProguardMappingFile, analyzerOptions,
-            isCompareFile = true,
-            needAppPackages = false
-        )
+        val dexProcessor = DexFileProcessor(DexProcessorHolder(isCompareFile = false, needAppPackages = true))
+        val dexProcessorOtherFile = DexFileProcessor(DexProcessorHolder(isCompareFile = true, needAppPackages = true))
+        dexProcessor.process(dataHolder = dataHolder, apkStats)
+        dexProcessorOtherFile.process(dataHolder = dataHolder, apkStats)
         val dexPackages = apkStats.dexPackages.orEmpty()
         val compareDexPackages = apkStats.comparedDexPackages.orEmpty()
         val packagesSet = hashSetOf<String>()
         val l1 = calculateDexPackagesSizeDiff(
             dexPackages, packagesSet,
-            compareDexPackages, analyzerOptions
+            compareDexPackages, dataHolder.analyzerOptions
         )
         val l2 = calculateDexPackagesSizeDiff(
             compareDexPackages, packagesSet,
-            dexPackages, analyzerOptions, true
+            dexPackages, dataHolder.analyzerOptions, true
         )
         val l3 = (l1 + l2).sortedByDescending { it.packageSizeDiff }
         apkStats.dexPackagesDiffs = l3
@@ -90,14 +58,13 @@ object DiffProcessor {
     }
 
     private fun calculateBaseSizes(
-        apkStats: ApkStats,
-        apkPath: Path,
-        compareApkPath: Path
+        dataHolder: DataHolder,
+        apkStats: ApkStats
     ) {
-        val apkSizeCalculator = ApkSizeCalculator.getDefault()
-
-        ApkSizeHelpers.calculateBasicSizes(apkStats, apkSizeCalculator, apkPath)
-        ApkSizeHelpers.calculateBasicSizes(apkStats, apkSizeCalculator, compareApkPath, true)
+        val basicSizeProcessor = BasicSizeProcessor(false)
+        val basicSizeProcessorOther = BasicSizeProcessor(true)
+        basicSizeProcessor.process(dataHolder, apkStats)
+        basicSizeProcessorOther.process(dataHolder, apkStats)
     }
 
     private fun calculateDexPackagesSizeDiff(
@@ -125,13 +92,17 @@ object DiffProcessor {
                         compareDex.basePackageSize, compareDex.packageSizeKb,
                         baseDex.depth,
                         diff,
-                        diff / ApkFileProcessor.BYTE_TO_KB_DIVIDER
+                        diff / Constants.BYTE_TO_KB_DIVIDER
                     )
                     list.add(dexDiff)
                 }
             }
         }
         return list
+    }
+
+    override fun process(dataHolder: DataHolder): ApkStats {
+        return calculate(dataHolder)
     }
 
 }
