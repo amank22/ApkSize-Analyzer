@@ -85,10 +85,18 @@ class ApkGeneralFileProcessor : SimpleProcessor() {
      * Used some common extensions like jpg, webp, png.
      */
     private fun isImageFile(apkFileData: ApkFileData): Boolean {
-        if (!apkFileData.simpleFileName.contains(".")) return false
-        val simpleFileName = apkFileData.simpleFileName.split(".")[1]
         val isDrawable = apkFileData.fileType.fileSubType.contains("drawable")
-        return isDrawable || simpleFileName == "png" || simpleFileName == "jpg" || simpleFileName == "jpeg" || simpleFileName == "webp"
+        return isDrawable || isImageFile(apkFileData.simpleFileName)
+    }
+
+    /**
+     * Checks if the name is of an image file according to the extension.
+     * Used some common extensions like jpg, webp, png.
+     */
+    private fun isImageFile(fileName: String): Boolean {
+        if (!fileName.contains(".")) return false
+        val simpleFileName = fileName.split(".")[1]
+        return simpleFileName == "png" || simpleFileName == "jpg" || simpleFileName == "jpeg" || simpleFileName == "webp"
     }
 
     /**
@@ -120,7 +128,12 @@ class ApkGeneralFileProcessor : SimpleProcessor() {
             return ApkFileType(fileType, singleName, fileType)
         }
         if (splitName.size == 2) {
-            return ApkFileType(fileType, splitName[1], fileType)
+            val localSubType = if (isImageFile(splitName[1])) {
+                "images"
+            } else {
+                fileType
+            }
+            return ApkFileType(fileType, splitName[1], localSubType)
         }
         if (splitName.size == 3) {
             val subtype = splitName[1]

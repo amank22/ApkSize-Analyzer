@@ -13,7 +13,7 @@ fun AnalyzerOptions.primaryHolder(): DataHolder {
         analyzerOptions.getPath(analyzerOptions.inputFileProguardPath)
     }
     val releaseApkPath = analyzerOptions.getPath(analyzerOptions.inputFilePath)
-    val separator = File.pathSeparator
+    val separator = File.separator
     val outputDirectory = if (analyzerOptions.isDiffMode) {
         analyzerOptions.getPath(analyzerOptions.outputFolderPath)
             .removeSuffix(separator) + "${separator}diffs$separator"

@@ -1,12 +1,6 @@
-buildscript {
-    repositories {
-        maven { url "https://plugins.gradle.org/m2/" }
-    }
-}
-
 plugins {
     id 'application'
-    id 'org.jetbrains.kotlin.jvm' version '1.5.0'
+    id 'org.jetbrains.kotlin.jvm' version '1.9.0'
     id 'java-library'
     id 'com.github.johnrengelman.shadow' version '7.0.0'
     id 'maven-publish'
@@ -18,24 +12,24 @@ configurations {
 
 group = 'com.gi.plugins'
 version = '0.3.1'
-def androidToolsVersion = '30.3.1'
+def androidToolsVersion = '31.1.0-rc01'
 
-repositories {
-    google()
-    jcenter()
-    mavenCentral()
-}
 dependencies {
     implementation platform('org.jetbrains.kotlin:kotlin-bom')
     implementation 'org.jetbrains.kotlin:kotlin-stdlib-jdk8'
     implementation 'com.google.code.gson:gson:2.9.0'
     implementation "com.android.tools:common:$androidToolsVersion"
     implementation "com.android.tools.apkparser:apkanalyzer:$androidToolsVersion"
-    implementation group: 'org.smali', name: 'dexlib2', version: '2.2.4'
-    implementation 'org.celtric.kotlin:kotlin-html:0.1.4'
+    implementation "com.android.tools.apkparser:binary-resources:$androidToolsVersion"
+    // https://mvnrepository.com/artifact/com.android.tools.smali/smali-dexlib2
+    implementation("com.android.tools.smali:smali-dexlib2:3.0.3")
+    implementation "org.jetbrains.kotlinx:kotlinx-metadata-jvm:0.7.0"
+    implementation group: 'org.smali', name: 'dexlib2', version: '2.5.2'
+//    implementation 'org.celtric.kotlin:kotlin-html:0.1.4'
+    implementation(project(':kotlin-html-master'))
 //    implementation group: 'com.openhtmltopdf', name: 'openhtmltopdf-pdfbox', version: '1.0.8'
-    implementation group: 'com.google.archivepatcher', name: 'archive-patch-generator', version: '1.0.4'
-    implementation group: 'com.google.archivepatcher', name: 'archive-patch-explainer', version: '1.0.4'
+//    implementation group: 'com.google.archivepatcher', name: 'archive-patch-generator', version: '1.0.4'
+//    implementation group: 'com.google.archivepatcher', name: 'archive-patch-explainer', version: '1.0.4'
 
     testImplementation 'org.jetbrains.kotlin:kotlin-test-junit'
 

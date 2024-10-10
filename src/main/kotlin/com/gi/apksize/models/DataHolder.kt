@@ -2,7 +2,7 @@ package com.gi.apksize.models
 
 import java.io.File
 
-data class DataHolder(
+data class DataHolder constructor(
     val analyzerOptions: AnalyzerOptions,
     val primaryFile: FileHolder,
     val outputDir: File,

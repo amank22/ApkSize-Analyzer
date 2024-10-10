@@ -35,6 +35,7 @@ object SingleStatsTask : Task {
                     kotlin.runCatching {
                         runProcess(process, dataHolder, apkStats)
                     }.onFailure {
+                        it.printStackTrace()
                         Printer.log(process.failedMsg(it))
                     }.onSuccess {
                         Printer.log(process.postMsg())

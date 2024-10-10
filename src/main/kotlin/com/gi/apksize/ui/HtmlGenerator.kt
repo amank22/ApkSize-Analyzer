@@ -5,6 +5,7 @@ import com.gi.apksize.models.ApkGroupSizes
 import com.gi.apksize.models.ApkStats
 import com.gi.apksize.models.DexPackageModel
 import org.celtric.kotlin.html.*
+import java.lang.IllegalArgumentException
 import java.text.CharacterIterator
 import java.text.NumberFormat
 import java.text.StringCharacterIterator
@@ -234,6 +235,8 @@ object HtmlGenerator {
             NumberFormat.getNumberInstance(Locale.ENGLISH)
                 .format(number)
         } catch (e: NumberFormatException) {
+            "Unknown"
+        } catch (e: IllegalArgumentException) {
             "Unknown"
         }
     }

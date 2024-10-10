@@ -25,8 +25,8 @@ object CompareTask : Task {
         dataHolder: DataHolder,
         apkStats: ApkStats
     ) {
-        val dexProcessor = DexFileProcessor(DexProcessorHolder(isCompareFile = false, needAppPackages = false))
-        val dexProcessorOtherFile = DexFileProcessor(DexProcessorHolder(isCompareFile = true, needAppPackages = false))
+        val dexProcessor = DexFileProcessor(DexProcessorHolder(isCompareFile = false, needAppPackages = true))
+        val dexProcessorOtherFile = DexFileProcessor(DexProcessorHolder(isCompareFile = true, needAppPackages = true))
         dexProcessor.process(dataHolder = dataHolder, apkStats)
         dexProcessorOtherFile.process(dataHolder = dataHolder, apkStats)
         val dexPackages = apkStats.dexPackages.orEmpty()
@@ -61,7 +61,7 @@ object CompareTask : Task {
         dataHolder: DataHolder,
         apkStats: ApkStats
     ) {
-        val basicSizeProcessor = BasicSizeProcessor(true)
+        val basicSizeProcessor = BasicSizeProcessor(false)
         val basicSizeProcessorOther = BasicSizeProcessor(true)
         basicSizeProcessor.process(dataHolder, apkStats)
         basicSizeProcessorOther.process(dataHolder, apkStats)

@@ -7,11 +7,11 @@ import com.android.tools.apk.analyzer.dex.*
 import com.android.tools.apk.analyzer.dex.tree.DexElementNode
 import com.android.tools.apk.analyzer.dex.tree.DexPackageNode
 import com.android.tools.proguard.ProguardMap
+import com.android.tools.smali.dexlib2.dexbacked.DexBackedDexFile
 import com.android.utils.ILogger
 import com.gi.apksize.models.*
 import com.gi.apksize.utils.Constants
 import com.gi.apksize.utils.Printer
-import org.jf.dexlib2.dexbacked.DexBackedDexFile
 import java.io.File
 import java.nio.file.Path
 import javax.swing.tree.TreeModel
@@ -39,11 +39,12 @@ class DexFileProcessor(private val dexProcessorHolder: DexProcessorHolder) : Sim
             Printer.log("No. of Dex Files: ${dexFilePaths.size}")
             val dexBackedDexList = mutableListOf<DexBackedDexFile>()
             val dexPackagesList = mutableListOf<DexPackageModel>()
+            val treeRoot = DexPackageTreeModel("root", 0L, 0, 0L)
             dexFilePaths.forEach {
                 val dexFile = DexFiles.getDexFile(it)
                 dexBackedDexList.add(dexFile)
                 Printer.log("Dex File: ${it.fileName}")
-                generateDexPackageModel(proguardMappingFile, dexFile, dexPackagesList, analyzerOptions)
+                generateDexPackageModel(proguardMappingFile, dexFile, treeRoot, dexPackagesList, analyzerOptions)
                 Printer.log("Processed Dex File: ${it.fileName}")
             }
             Printer.log("Processed All Dex Files")
@@ -59,8 +60,9 @@ class DexFileProcessor(private val dexProcessorHolder: DexProcessorHolder) : Sim
                 item.packageSizeKb = item.basePackageSize / Constants.BYTE_TO_KB_DIVIDER
                 item
             }.filterNot { it.depth <= analyzerOptions.dexPackagesMinDepth }.sortedByDescending { it.basePackageSize }
-            val appPackages = uniquePackageList.filter { p -> analyzerOptions.appPackagePrefix.any { p.basePackage.startsWith(it) } }
-                .take(analyzerOptions.appPackagesMaxCount)
+            val appPackages =
+                uniquePackageList.filter { p -> analyzerOptions.appPackagePrefix.any { p.basePackage.startsWith(it) } }
+                    .take(analyzerOptions.appPackagesMaxCount)
             val dexStats = DexFileStats.create(dexBackedDexList)
             if (!dexProcessorHolder.isCompareFile) {
                 apkStats.dexStats = dexStats
@@ -82,6 +84,7 @@ class DexFileProcessor(private val dexProcessorHolder: DexProcessorHolder) : Sim
     private fun generateDexPackageModel(
         proguardMappingFile: File?,
         dexBackedDex: DexBackedDexFile,
+        treeModel: DexPackageTreeModel,
         dexPackagesList: MutableList<DexPackageModel>,
         analyzerOptions: AnalyzerOptions
     ) {
@@ -100,11 +103,22 @@ class DexFileProcessor(private val dexProcessorHolder: DexProcessorHolder) : Sim
         options.isShowMethods = false
         options.isShowReferencedNodes = false
         options.isShowRemovedNodes = false
-        val filteredTreeModel: FilteredTreeModel<DexElementNode> = FilteredTreeModel(
-            rootNode.firstChild,
-            options
-        )
-        createNodes(filteredTreeModel, rootNode.firstChild as DexElementNode, dexPackagesList, 1, analyzerOptions)
+        val nodesIterator = rootNode.children().asIterator()
+        while (nodesIterator.hasNext()) {
+            val child = nodesIterator.next()
+            val filteredTreeModel: FilteredTreeModel<DexElementNode> = FilteredTreeModel(
+                child,
+                options
+            )
+            createNodes(
+                filteredTreeModel,
+                child as DexElementNode,
+                treeModel,
+                dexPackagesList,
+                1,
+                analyzerOptions
+            )
+        }
     }
 
     /**
@@ -113,6 +127,7 @@ class DexFileProcessor(private val dexProcessorHolder: DexProcessorHolder) : Sim
     private fun createNodes(
         model: TreeModel,
         node: DexElementNode,
+        treeModel: DexPackageTreeModel,
         dexPackagesList: MutableList<DexPackageModel>,
         depth: Int,
         analyzerOptions: AnalyzerOptions
@@ -122,11 +137,28 @@ class DexFileProcessor(private val dexProcessorHolder: DexProcessorHolder) : Sim
             (it as DexElementNode).name
         }
         val packageModel = DexPackageModel(routePath, node.size, depth)
+        val packageTreeModel = DexPackageTreeModel(routePath, node.size, depth)
+        val oldChildren = treeModel.children.orEmpty()
+        val updatedChildren = hashSetOf<DexPackageTreeModel>()
+        var newConsumed = false
+        oldChildren.forEach {
+            if (it == packageTreeModel) {
+                updatedChildren.add(packageTreeModel.copy(basePackageSize = it.basePackageSize + packageTreeModel.basePackageSize))
+                newConsumed = true
+            } else {
+                updatedChildren.add(it)
+            }
+        }
+        if (!newConsumed) {
+            updatedChildren.add(packageTreeModel)
+        }
+        treeModel.children = updatedChildren
         val count = model.getChildCount(node)
         for (i in 0 until count) {
             createNodes(
                 model,
                 node.getChildAt(i) as DexElementNode,
+                packageTreeModel,
                 dexPackagesList,
                 depth + 1,
                 analyzerOptions
@@ -158,9 +190,13 @@ class DexFileProcessor(private val dexProcessorHolder: DexProcessorHolder) : Sim
 
     override fun process(dataHolder: DataHolder, apkStats: ApkStats) {
         val analyzerOptions = dataHolder.analyzerOptions
-        val primaryFile = dataHolder.primaryFile.file
+        val primaryFile = if (!dexProcessorHolder.isCompareFile) {
+            dataHolder.primaryFile.file
+        } else {
+            dataHolder.secondaryFile!!.file
+        }
         val apk = primaryFile.toPath()
-        val separator: String = File.pathSeparator
+        val separator: String = File.separator
         val copyPath = Path.of(
             dataHolder.outputDir.absolutePath + separator +
                     primaryFile.nameWithoutExtension + "-dex" + primaryFile.extension

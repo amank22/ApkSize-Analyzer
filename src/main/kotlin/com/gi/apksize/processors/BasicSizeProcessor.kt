@@ -10,7 +10,11 @@ import java.nio.file.Path
 class BasicSizeProcessor(private val isComparingApk : Boolean) : SimpleProcessor() {
 
     override fun process(dataHolder: DataHolder, apkStats: ApkStats) {
-        val apk = dataHolder.primaryFile.file.toPath()
+        val apk = if (!isComparingApk) {
+            dataHolder.primaryFile.file.toPath()
+        } else {
+            dataHolder.secondaryFile!!.file.toPath()
+        }
         val apkSizeCalculator = ApkSizeCalculator.getDefault()
         calculateBasicSizes(apkStats, apkSizeCalculator, apk, isComparingApk)
     }
