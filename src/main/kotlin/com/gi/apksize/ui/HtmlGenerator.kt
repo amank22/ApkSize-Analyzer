@@ -232,7 +232,7 @@ object HtmlGenerator {
 
     private fun giveFormattedNumberText(number: Int?): String {
         return try {
-            NumberFormat.getNumberInstance(Locale.ENGLISH)
+            NumberFormat.getNumberInstance(Locale.US)
                 .format(number)
         } catch (e: NumberFormatException) {
             "Unknown"
