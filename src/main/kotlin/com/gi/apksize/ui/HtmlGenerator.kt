@@ -1,9 +1,6 @@
 package com.gi.apksize.ui
 
-import com.gi.apksize.models.ApkFileData
-import com.gi.apksize.models.ApkGroupSizes
-import com.gi.apksize.models.ApkStats
-import com.gi.apksize.models.DexPackageModel
+import com.gi.apksize.models.*
 import org.celtric.kotlin.html.*
 import java.lang.IllegalArgumentException
 import java.text.CharacterIterator
@@ -32,12 +29,24 @@ object HtmlGenerator {
         }
     }
 
+    private fun isAab(apkStats: ApkStats): Boolean =
+        apkStats.inputFileType == InputFileType.AAB
+
+    private fun fileTypeLabel(apkStats: ApkStats): String =
+        if (isAab(apkStats)) "AAB" else "APK"
+
     private fun body(apkStats: ApkStats): BlockElement {
         return body {
             section(classes = "section") {
-                header() + appName(apkStats) + apkFileSizeStats(apkStats) +
+                header(apkStats) + appName(apkStats) +
+                        manifestInfoSection(apkStats) +
+                        apkFileSizeStats(apkStats) +
                         apkResourcesStats(apkStats) +
+                        estimatedDownloadSizesSection(apkStats) +
+                        bundleModulesSection(apkStats) +
                         apkDataColumns(apkStats) +
+                        bundleDependenciesSection(apkStats) +
+                        bundleConfigSection(apkStats) +
                         footerByAman()
             }
         }
@@ -70,7 +79,7 @@ object HtmlGenerator {
     private fun apkDataColumns(apkStats: ApkStats): BlockElement {
         val items = listOf(
             "Biggest Images", "Biggest other Files", "Dex Packages", "App Packages",
-            "Apk Group Sizes", "Top Packaged Files"
+            "File Group Sizes", "Top Packaged Files"
         )
         return columns {
             val item3List = items.chunked(1)
@@ -84,7 +93,7 @@ object HtmlGenerator {
                                 "App Packages" -> dexPackagesPanel(apkStats.appPackages, it)
                                 "Dex Packages" -> dexPackagesPanel(apkStats.dexPackages, it)
                                 "Biggest other Files" -> topGenericFilesPanel(apkStats.topFilteredFiles, it)
-                                "Apk Group Sizes" -> groupSizesPanel(apkStats.groupSizes, it)
+                                "File Group Sizes" -> groupSizesPanel(apkStats.groupSizes, it)
                                 else -> div { }
                             }
                         }
@@ -106,22 +115,24 @@ object HtmlGenerator {
         }
     }
 
-    private fun header(): BlockElement {
+    private fun header(apkStats: ApkStats): BlockElement {
+        val label = fileTypeLabel(apkStats)
         return div(classes = "container") {
             h1(classes = "title is-2 has-text-danger has-text-centered has-text-weight-bold") {
-                "Apk Size Analyzer"
+                "$label Size Analyzer"
             } + p(classes = "subtitle is-5 has-text-centered is-family-secondary") {
-                text("Deeper Insights for your ") + strong("Apk") + "!"
+                text("Deeper Insights for your ") + strong(label) + "!"
             }
         }
     }
 
     private fun apkFileSizeStats(apkStats: ApkStats): BlockElement {
+        val label = fileTypeLabel(apkStats)
         return nav(classes = "columns is-mobile is-centered is-multiline mt-6 pt-3") {
             div(classes = "column is-narrow has-text-centered") {
                 div {
                     p(classes = "heading") {
-                        "Apk Raw Size"
+                        "$label Raw Size"
                     } + p(classes = "title") {
                         humanReadableByteCountSI(apkStats.apkSize)
                     }
@@ -129,7 +140,7 @@ object HtmlGenerator {
             } + div(classes = "column is-narrow has-text-centered") {
                 div {
                     p(classes = "heading") {
-                        "Apk Download Size"
+                        "$label Download Size"
                     } + p(classes = "title") {
                         humanReadableByteCountSI(apkStats.downloadSize)
                     }
@@ -274,8 +285,16 @@ object HtmlGenerator {
     private fun panelItemRow(apkFileData: ApkFileData): BlockElement {
         return div(classes = "panel-block") {
             div(classes = "container") {
-                span(classes = "tag is-info is-light is-hidden-mobile") {
-                    apkFileData.fileType.fileSubType
+                div(classes = "tags mb-1") {
+                    span(classes = "tag is-info is-light") {
+                        apkFileData.fileType.fileSubType
+                    } + if (!apkFileData.moduleName.isNullOrEmpty()) {
+                        listOf(span(classes = "tag is-success is-light") {
+                            apkFileData.moduleName
+                        })
+                    } else {
+                        listOf(text(""))
+                    }
                 } +
                         p(classes = "title is-size-5 has-text-weight-light") {
                             apkFileData.simpleFileName
@@ -338,6 +357,319 @@ object HtmlGenerator {
             }
         }
     }
+
+    // region AAB-specific sections
+
+    /**
+     * Shows manifest info (package name, version, SDK levels) for AAB analysis.
+     */
+    private fun manifestInfoSection(apkStats: ApkStats): BlockElement {
+        if (!isAab(apkStats) || apkStats.manifestPackageName.isNullOrBlank()) return div { }
+        return nav(classes = "columns is-mobile is-centered is-multiline mt-4 pt-3") {
+            div(classes = "column is-narrow has-text-centered") {
+                div {
+                    p(classes = "heading") { "Package" } +
+                            p(classes = "title is-size-5") { apkStats.manifestPackageName!! }
+                }
+            } + div(classes = "column is-narrow has-text-centered") {
+                div {
+                    p(classes = "heading") { "Version" } +
+                            p(classes = "title is-size-5") {
+                                "${apkStats.manifestVersionName ?: "?"} (${apkStats.manifestVersionCode ?: "?"})"
+                            }
+                }
+            } + div(classes = "column is-narrow has-text-centered") {
+                div {
+                    p(classes = "heading") { "Min SDK" } +
+                            p(classes = "title is-size-5") { "${apkStats.manifestMinSdk ?: "?"}" }
+                }
+            } + div(classes = "column is-narrow has-text-centered") {
+                div {
+                    p(classes = "heading") { "Target SDK" } +
+                            p(classes = "title is-size-5") { "${apkStats.manifestTargetSdk ?: "?"}" }
+                }
+            }
+        }
+    }
+
+    /**
+     * Shows per-module breakdown for AAB analysis.
+     */
+    private fun bundleModulesSection(apkStats: ApkStats): BlockElement {
+        val modules = apkStats.bundleModules
+        if (modules.isNullOrEmpty()) return div { }
+        return div(classes = "container mt-6") {
+            h1(classes = "title has-text-info has-text-centered has-text-weight-bold") {
+                "Module Breakdown"
+            } + p(classes = "subtitle is-6 has-text-centered has-text-grey") {
+                "Compressed sizes per module as stored in the AAB (${modules.size} modules)"
+            } + div(classes = "columns is-multiline") {
+                modules.map { module ->
+                    div(classes = "column is-one-third") {
+                        div(classes = "box") {
+                            // Header: module name + total size
+                            p(classes = "title is-5 mb-1") {
+                                module.moduleName
+                            } + p(classes = "title is-4 has-text-danger mb-3") {
+                                humanReadableByteCountSI(module.totalSize)
+                            } + div(classes = "tags mb-2") {
+                                span(classes = "tag is-info is-light") {
+                                    module.deliveryLabel
+                                } + span(classes = "tag is-light") {
+                                    "${module.fileCount} files"
+                                } + span(classes = "tag is-warning is-light") {
+                                    "${module.sizePercentage}% of AAB"
+                                } + if (module.nativeAbis.isNotEmpty()) {
+                                    module.nativeAbis.map { abi ->
+                                        span(classes = "tag is-success is-light") { abi }
+                                    }
+                                } else {
+                                    listOf(text(""))
+                                }
+                            } + p(classes = "is-size-7 has-text-grey mb-3") {
+                                module.deliveryDescription
+                            } + div(classes = "content is-small") {
+                                table(classes = "table is-fullwidth is-narrow") {
+                                    thead {
+                                        tr {
+                                            th { "Component" } + th { "Size" }
+                                        }
+                                    } + tbody {
+                                        tr {
+                                            td { "Code / DEX" } +
+                                                    td { strong { humanReadableByteCountSI(module.dexSize) } }
+                                        } + tr {
+                                            td { "Resources" } +
+                                                    td { strong { humanReadableByteCountSI(module.resourcesSize) } }
+                                        } + tr {
+                                            td { "Assets" } +
+                                                    td { strong { humanReadableByteCountSI(module.assetsSize) } }
+                                        } + tr {
+                                            td {
+                                                text("Native Libs") +
+                                                        if (module.nativeAbis.isNotEmpty()) {
+                                                            text(" (${module.nativeAbis.joinToString(", ")})")
+                                                        } else {
+                                                            text("")
+                                                        }
+                                            } +
+                                                    td { strong { humanReadableByteCountSI(module.nativeLibsSize) } }
+                                        } + tr {
+                                            td { "Other" } +
+                                                    td { strong { humanReadableByteCountSI(module.otherSize) } }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /**
+     * Shows estimated download sizes for different device configurations (low/mid/high-end).
+     * These approximate what a user would download from the Play Store.
+     */
+    private fun estimatedDownloadSizesSection(apkStats: ApkStats): BlockElement {
+        val sizes = apkStats.estimatedDeviceSizes
+        if (sizes.isNullOrEmpty()) return div { }
+        return div(classes = "container mt-6") {
+            h1(classes = "title has-text-info has-text-centered has-text-weight-bold") {
+                "Estimated Download Sizes"
+            } + p(classes = "subtitle is-6 has-text-centered has-text-grey") {
+                "Approximate Play Store download sizes for different device tiers (base module install)"
+            } + div(classes = "columns is-multiline is-centered") {
+                sizes.map { size ->
+                    div(classes = "column is-one-third") {
+                        div(classes = "box") {
+                            p(classes = "title is-4 has-text-centered") {
+                                size.configName
+                            } + p(classes = "subtitle is-6 has-text-centered has-text-grey") {
+                                "${size.abi} | ${size.screenDensityDpi}dpi | SDK ${size.sdkVersion}"
+                            } + div(classes = "has-text-centered mb-4") {
+                                p(classes = "title is-3 has-text-danger") {
+                                    humanReadableByteCountSI(size.totalDownloadBytes)
+                                } + p(classes = "heading") {
+                                    "Download Size"
+                                }
+                            } + div(classes = "has-text-centered mb-4") {
+                                p(classes = "title is-5 has-text-grey") {
+                                    humanReadableByteCountSI(size.totalDiskBytes)
+                                } + p(classes = "heading") {
+                                    "On-disk Size"
+                                }
+                            } + div(classes = "content is-small") {
+                                table(classes = "table is-fullwidth is-narrow") {
+                                    thead {
+                                        tr {
+                                            th { "Component" } + th { "Download" }
+                                        }
+                                    } + tbody {
+                                        tr {
+                                            td { "Code / DEX" } +
+                                                    td { strong { humanReadableByteCountSI(size.dexDownloadBytes) } }
+                                        } + tr {
+                                            td { "Resources" } +
+                                                    td { strong { humanReadableByteCountSI(size.resourcesDownloadBytes) } }
+                                        } + tr {
+                                            td { "Assets" } +
+                                                    td { strong { humanReadableByteCountSI(size.assetsDownloadBytes) } }
+                                        } + tr {
+                                            td { "Native Libs" } +
+                                                    td { strong { humanReadableByteCountSI(size.nativeLibsDownloadBytes) } }
+                                        } + tr {
+                                            td { "Other" } +
+                                                    td { strong { humanReadableByteCountSI(size.otherDownloadBytes) } }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /**
+     * Shows Maven dependencies extracted from AAB metadata, grouped by category:
+     * - App Modules (matched via appModulePrefixes config)
+     * - Android / Google (androidx.*, com.google.*, com.android.*)
+     * - Third-party (everything else)
+     */
+    private fun bundleDependenciesSection(apkStats: ApkStats): BlockElement {
+        val deps = apkStats.bundleDependencies
+        if (deps.isNullOrEmpty()) return div { }
+
+        val appPrefixes = apkStats.appModulePrefixes
+        val platformPrefixes = listOf("androidx.", "com.google.", "com.android.", "org.jetbrains.")
+
+        data class DepGroup(
+            val title: String,
+            val tagClass: String,
+            val deps: List<BundleDependencyInfo>
+        )
+
+        val appModuleDeps = if (appPrefixes.isNotEmpty()) {
+            deps.filter { dep -> appPrefixes.any { prefix -> dep.groupId.startsWith(prefix) } }
+        } else {
+            emptyList()
+        }
+        val platformDeps = deps.filter { dep ->
+            platformPrefixes.any { prefix -> dep.groupId.startsWith(prefix) } &&
+                    dep !in appModuleDeps
+        }
+        val thirdPartyDeps = deps - appModuleDeps.toSet() - platformDeps.toSet()
+
+        val groups = mutableListOf<DepGroup>()
+        if (appModuleDeps.isNotEmpty()) {
+            groups.add(DepGroup("App Modules (${appModuleDeps.size})", "is-success", appModuleDeps))
+        }
+        if (platformDeps.isNotEmpty()) {
+            groups.add(DepGroup("Android / Google / Kotlin (${platformDeps.size})", "is-info", platformDeps))
+        }
+        if (thirdPartyDeps.isNotEmpty()) {
+            groups.add(DepGroup("Third-party (${thirdPartyDeps.size})", "is-warning", thirdPartyDeps))
+        }
+
+        return div(classes = "container mt-6") {
+            h1(classes = "title has-text-info has-text-centered has-text-weight-bold") {
+                "Dependencies (${deps.size})"
+            } + p(classes = "subtitle is-6 has-text-centered has-text-grey") {
+                "Maven libraries from dependencies.pb"
+            } + div(classes = "columns is-multiline") {
+                groups.map { group ->
+                    div(classes = "column is-one-third") {
+                        article(classes = "panel") {
+                            p(classes = "panel-heading") { group.title } +
+                                    group.deps.map { dep ->
+                                        div(classes = "panel-block") {
+                                            div(classes = "container") {
+                                                span(classes = "tag ${group.tagClass} is-light mr-2") {
+                                                    dep.groupId
+                                                } + p(classes = "title is-size-6 has-text-weight-light") {
+                                                    dep.artifactId
+                                                } + p(classes = "subtitle is-size-7 has-text-grey") {
+                                                    dep.version
+                                                }
+                                            }
+                                        }
+                                    }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /**
+     * Shows bundle configuration details for AAB analysis.
+     */
+    private fun bundleConfigSection(apkStats: ApkStats): BlockElement {
+        val config = apkStats.bundleConfig ?: return div { }
+
+        // Convert raw case-insensitive globs like "**.[pP][nN][gG]" to clean extensions like ".png"
+        val cleanedExtensions = config.compressionUncompressedGlobs.map { glob ->
+            glob.replace("**", "")
+                .replace(Regex("\\[([a-zA-Z0-9])([a-zA-Z0-9])\\]") ) { match ->
+                    match.groupValues[1].lowercase()
+                }
+        }.sorted().distinct()
+
+        return div(classes = "container mt-6") {
+            h1(classes = "title has-text-info has-text-centered has-text-weight-bold") {
+                "Bundle Configuration"
+            } + article(classes = "panel") {
+                p(classes = "panel-heading") { "BundleConfig.pb" } +
+                        div(classes = "panel-block") {
+                            div(classes = "container") {
+                                div(classes = "columns is-multiline") {
+                                    div(classes = "column is-half") {
+                                        p(classes = "heading") { "Bundletool Version" } +
+                                                p(classes = "title is-5") { config.bundletoolVersion }
+                                    } + div(classes = "column is-half") {
+                                        p(classes = "heading") { "Split Dimensions" } +
+                                                div(classes = "tags") {
+                                                    if (config.splitDimensions.isNotEmpty()) {
+                                                        config.splitDimensions.map { dim ->
+                                                            span(classes = "tag is-info is-light") { dim }
+                                                        }
+                                                    } else {
+                                                        listOf(span(classes = "tag is-light") { "None" })
+                                                    }
+                                                }
+                                    } + div(classes = "column is-half") {
+                                        p(classes = "heading") { "Uncompress Native Libs" } +
+                                                span(classes = "tag ${if (config.uncompressNativeLibs) "is-success" else "is-light"}") {
+                                                    "${config.uncompressNativeLibs}"
+                                                }
+                                    } + div(classes = "column is-half") {
+                                        p(classes = "heading") { "Uncompress DEX" } +
+                                                span(classes = "tag ${if (config.uncompressDex) "is-success" else "is-light"}") {
+                                                    "${config.uncompressDex}"
+                                                }
+                                    } + div(classes = "column is-full") {
+                                        p(classes = "heading") { "Uncompressed File Types (${cleanedExtensions.size})" } +
+                                                div(classes = "tags") {
+                                                    if (cleanedExtensions.isNotEmpty()) {
+                                                        cleanedExtensions.map { ext ->
+                                                            span(classes = "tag is-warning is-light") { ext }
+                                                        }
+                                                    } else {
+                                                        listOf(span(classes = "tag is-light") { "None" })
+                                                    }
+                                                }
+                                    }
+                                }
+                            }
+                        }
+            }
+        }
+    }
+
+    // endregion
 
     private fun humanReadableByteCountSI(bytes: Long?): String {
         if (bytes == null) return "0 bytes"

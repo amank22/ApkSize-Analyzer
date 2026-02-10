@@ -39,6 +39,31 @@ class ApkStats {
     var comparedDexPackages : List<DexPackageModel>? = null
     var comparedAppPackages : List<DexPackageModel>? = null
 
+    // region AAB-specific fields
+    /** Type of input file analyzed (APK or AAB) */
+    var inputFileType: InputFileType? = null
+    /** Per-module breakdown for AAB analysis */
+    var bundleModules: List<BundleModuleInfo>? = null
+    /** Maven dependencies extracted from AAB metadata */
+    var bundleDependencies: List<BundleDependencyInfo>? = null
+    /** Group ID prefixes that identify app's own modules (from config) */
+    var appModulePrefixes: List<String> = emptyList()
+    /** Bundle configuration from BundleConfig.pb */
+    var bundleConfig: BundleConfigInfo? = null
+    /** Package name from AndroidManifest.xml */
+    var manifestPackageName: String? = null
+    /** Version code from AndroidManifest.xml */
+    var manifestVersionCode: Int? = null
+    /** Version name from AndroidManifest.xml */
+    var manifestVersionName: String? = null
+    /** Minimum SDK version from AndroidManifest.xml */
+    var manifestMinSdk: Int? = null
+    /** Target SDK version from AndroidManifest.xml */
+    var manifestTargetSdk: Int? = null
+    /** Estimated download sizes for different device configurations (low/mid/high-end) */
+    var estimatedDeviceSizes: List<EstimatedDeviceSize>? = null
+    // endregion
+
     fun json(): String {
         val gson = Gson()
         return gson.toJson(this)

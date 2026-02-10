@@ -5,7 +5,7 @@ import com.google.gson.Gson
 import java.io.File
 
 fun main(args: Array<String>) {
-    Printer.log("Analysing apk!")
+    Printer.log("Analysing input file!")
     var analyzerOptions = AnalyzerOptions()
     if (args.isEmpty()) {
         Printer.error("Pass arguments to run the program")
@@ -65,7 +65,8 @@ fun main(args: Array<String>) {
     }
     analyzerOptions = analyzerOptions.copy(arePathsAbsolute = isAbsolutePaths)
     ApkSizeTask.evaluate(analyzerOptions)
-    Printer.log("Analysed apk. You can find the files the output files at ${analyzerOptions.outputFolderPath}.")
+    val fileTypeLabel = if (analyzerOptions.inputFileType() == com.gi.apksize.models.InputFileType.AAB) "AAB" else "APK"
+    Printer.log("Analysed $fileTypeLabel. You can find the output files at ${analyzerOptions.outputFolderPath}.")
 }
 
 fun updateOptions(args: Array<String>, analyzerOptions: AnalyzerOptions): AnalyzerOptions {

@@ -2,6 +2,7 @@ package com.gi.apksize.tasks
 
 import com.gi.apksize.models.AnalyzerOptions
 import com.gi.apksize.models.ApkStats
+import com.gi.apksize.models.InputFileType
 import com.gi.apksize.ui.DiffHtmlGenerator
 import com.gi.apksize.ui.HtmlGenerator
 import com.gi.apksize.utils.Printer
@@ -13,25 +14,32 @@ import java.io.File
 object ApkSizeTask {
 
     fun evaluate(analyzerOptions: AnalyzerOptions) {
+        val isAab = analyzerOptions.inputFileType() == InputFileType.AAB
+
         val holder = if (!analyzerOptions.isDiffMode) {
             analyzerOptions.primaryHolder()
         } else {
             analyzerOptions.compareHolder()
         }
-        val task = if (!analyzerOptions.isDiffMode) {
-            SingleStatsTask
-        } else {
-            CompareTask
+
+        val task = when {
+            analyzerOptions.isDiffMode -> CompareTask
+            isAab -> BundleStatsTask
+            else -> SingleStatsTask
         }
+
         val apkStats = task.process(holder)
         Printer.log("tasks done : $apkStats")
         apkStats.apkName = analyzerOptions.appName
+        if (apkStats.inputFileType == null) {
+            apkStats.inputFileType = analyzerOptions.inputFileType()
+        }
         val outputFolder = holder.outputDir
         writeApkStatsToJsonFile(apkStats, outputFolder)
         Printer.log("writeApkStatsToJsonFile done")
         val html = writeApkStatsToHtmlFile(apkStats, outputFolder, analyzerOptions.isDiffMode)
 //        writeApkStatsToPdfFile(html, outputFolder)
-        if (!analyzerOptions.isDiffMode) {
+        if (!analyzerOptions.isDiffMode && !isAab) {
             writeAaptStatsToJsonFile(apkStats, outputFolder)
         }
     }

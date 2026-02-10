@@ -97,6 +97,13 @@ data class AnalyzerOptions(
     val dexPackagesSizeLimiter: Long = 51200L,
     //endregion
 
+    /**
+     * Group ID prefixes that identify your app's own modules in the dependencies list.
+     * Dependencies whose groupId starts with any of these prefixes are classified as "App Modules".
+     * Example: ["com.makemytrip", "com.mmt", "com.goibibo"]
+     */
+    val appModulePrefixes: List<String> = listOf(),
+
     //region Aapt Configs
 
     /**
@@ -159,6 +166,18 @@ data class AnalyzerOptions(
      * Returns path according to `arePathsAbsolute` value.
      * For relative paths, appends the base dir path.
      */
+    /**
+     * Detects the input file type based on the file extension.
+     * Returns [InputFileType.AAB] for .aab files, [InputFileType.APK] otherwise.
+     */
+    fun inputFileType(): InputFileType {
+        return if (inputFilePath.endsWith(".aab", ignoreCase = true)) {
+            InputFileType.AAB
+        } else {
+            InputFileType.APK
+        }
+    }
+
     fun getPath(path: String): String {
         return if (arePathsAbsolute) {
             path

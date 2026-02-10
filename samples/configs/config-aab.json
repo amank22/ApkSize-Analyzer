@@ -1,0 +1,27 @@
+{
+  "inputFilePath":"/samples/test/aab/app-release.aab",
+  "outputFolderPath":"/samples/outputs/",
+  "appName": "MakeMyTrip",
+  "appPackagePrefix": [
+    "com.makemytrip",
+    "com.mmt",
+    "com.gommt",
+    "com.panoramagl",
+    "com.goibibo",
+    "com.tripmoney"
+  ],
+  "appModulePrefixes": [
+    "com.makemytrip",
+    "com.mmt",
+    "com.gommt",
+    "com.goibibo",
+    "com.tripmoney"
+  ],
+  "topFilesImagesSizeLimiter": 10240,
+  "filteredFilesSizeLimiter": 5000,
+  "filesListMaxCount": 50,
+  "dexPackagesMinDepth": 2,
+  "appPackagesMaxCount": 50,
+  "dexPackagesMaxCount": 50,
+  "dexPackagesSizeLimiter": 51200
+}
