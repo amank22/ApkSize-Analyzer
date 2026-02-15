@@ -32,8 +32,15 @@ object HtmlGenerator {
     private fun isAab(apkStats: ApkStats): Boolean =
         apkStats.inputFileType == InputFileType.AAB
 
+    private fun isInstallTimeApkAnalysis(apkStats: ApkStats): Boolean =
+        isAab(apkStats) && apkStats.isInstallTimeApkAnalysis == true
+
     private fun fileTypeLabel(apkStats: ApkStats): String =
-        if (isAab(apkStats)) "AAB" else "APK"
+        when {
+            isInstallTimeApkAnalysis(apkStats) -> "Install-time APK"
+            isAab(apkStats) -> "AAB"
+            else -> "APK"
+        }
 
     private fun body(apkStats: ApkStats): BlockElement {
         return body {
@@ -44,6 +51,7 @@ object HtmlGenerator {
                         apkResourcesStats(apkStats) +
                         estimatedDownloadSizesSection(apkStats) +
                         bundleModulesSection(apkStats) +
+                        lobAnalysisSection(apkStats) +
                         apkDataColumns(apkStats) +
                         bundleDependenciesSection(apkStats) +
                         bundleConfigSection(apkStats) +
@@ -357,6 +365,195 @@ object HtmlGenerator {
             }
         }
     }
+
+    // region LOB Analysis section
+
+    /**
+     * Shows per-LOB (functional unit) size breakdown when LOB analysis is available.
+     */
+    private fun lobAnalysisSection(apkStats: ApkStats): BlockElement {
+        val lob = apkStats.lobAnalysis ?: return div { }
+        val lobSizes = lob.lobSizes
+        if (lobSizes.isEmpty()) return div { }
+        val attributedTotal = lob.summary.totalAttributedBytes
+        val unattributedTotal = lob.summary.totalUnattributedBytes
+        val unmatchedFilesBytes = lob.unmatchedFiles.totalSizeBytes
+        val unmatchedDexBytes = lob.unmatchedDex.totalSizeBytes
+        val attributedPlusUnattributed = attributedTotal + unattributedTotal
+        val effectiveTotalWithDexOverhead = attributedPlusUnattributed + lob.summary.dexOverheadBytes
+        val artifactTotal = apkStats.artifactSizeBreakdown?.total
+        val artifactLabel = when {
+            isInstallTimeApkAnalysis(apkStats) -> "Install-time APK Total"
+            isAab(apkStats) -> "Bundle Total"
+            else -> "APK Total"
+        }
+        val sourceTotalLabel = "${fileTypeLabel(apkStats)} Raw Size"
+        val sourceTotalNote = when {
+            isInstallTimeApkAnalysis(apkStats) ->
+                "From generated install-time APK (base + install-time modules)"
+            isAab(apkStats) -> "From input AAB file size"
+            else -> "From input APK file size"
+        }
+
+        return div(classes = "container mt-6") {
+            h1(classes = "title has-text-info has-text-centered has-text-weight-bold") {
+                "LOB Size Analysis"
+            } + p(classes = "subtitle is-6 has-text-centered has-text-grey") {
+                "Size attribution by functional unit (${lobSizes.size} LOBs, " +
+                        "${lob.summary.coveragePercent}% attributed)"
+            } + div(classes = "columns is-mobile is-centered is-multiline mt-2") {
+                lobSummaryMetricCard(
+                    title = "Attributed (LOB Mapped)",
+                    value = humanReadableByteCountSI(attributedTotal),
+                    subtitle = "Coverage: ${lob.summary.coveragePercent}%"
+                ) +
+                        lobSummaryMetricCard(
+                            title = "Unattributed",
+                            value = humanReadableByteCountSI(unattributedTotal),
+                            subtitle = "${lob.unmatchedFiles.count} files + ${lob.unmatchedDex.count} DEX packages"
+                        ) +
+                        if (lob.summary.dexOverheadBytes > 0) {
+                            lobSummaryMetricCard(
+                                title = "DEX Overhead",
+                                value = humanReadableByteCountSI(lob.summary.dexOverheadBytes),
+                                subtitle = "Not attributable to package-level mapping"
+                            )
+                        } else {
+                            div { }
+                        } +
+                        lobSummaryMetricCard(
+                            title = "Attributed + Unattributed",
+                            value = humanReadableByteCountSI(attributedPlusUnattributed),
+                            subtitle = "Primary LOB-reconciled total"
+                        )
+            } + div(classes = "table-container") {
+                table(classes = "table is-fullwidth is-hoverable is-striped") {
+                    thead {
+                        tr {
+                            th { "#" } +
+                                    th { "LOB" } +
+                                    th { "Code (DEX)" } +
+                                    th { "Resources" } +
+                                    th { "Assets" } +
+                                    th { "Native Libs" } +
+                                    th { "Other" } +
+                                    th { "Total" } +
+                                    th { "% of Attributed" }
+                        }
+                    } + tbody {
+                        lobSizes.entries.toList().mapIndexed { index, (fuName, breakdown) ->
+                            val share = if (attributedTotal > 0) {
+                                breakdown.total.toDouble() / attributedTotal * 100.0
+                            } else 0.0
+                            tr {
+                                td { "${index + 1}" } +
+                                        td { strong(fuName) } +
+                                        td { humanReadableByteCountSI(breakdown.code) } +
+                                        td { humanReadableByteCountSI(breakdown.resources) } +
+                                        td { humanReadableByteCountSI(breakdown.assets) } +
+                                        td { humanReadableByteCountSI(breakdown.nativeLibs) } +
+                                        td { humanReadableByteCountSI(breakdown.other) } +
+                                        td { strong { humanReadableByteCountSI(breakdown.total) } } +
+                                        td { "${String.format("%.2f", share)}%" }
+                            }
+                        }
+                    } + tfoot {
+                        tr(classes = "has-background-info-light") {
+                            td { strong("-") } +
+                                    td { strong("Total (All LOBs / Attributed)") } +
+                                    td { strong { humanReadableByteCountSI(lob.total.code) } } +
+                                    td { strong { humanReadableByteCountSI(lob.total.resources) } } +
+                                    td { strong { humanReadableByteCountSI(lob.total.assets) } } +
+                                    td { strong { humanReadableByteCountSI(lob.total.nativeLibs) } } +
+                                    td { strong { humanReadableByteCountSI(lob.total.other) } } +
+                                    td { strong { humanReadableByteCountSI(lob.total.total) } } +
+                                    td { strong("100.00%") }
+                        }
+                    }
+                }
+            } + div(classes = "table-container mt-4") {
+                table(classes = "table is-fullwidth is-bordered is-narrow") {
+                    thead {
+                        tr {
+                            th { "Reconciliation Metric" } +
+                                    th { "Details" } +
+                                    th { "Size" }
+                        }
+                    } + tbody {
+                        tr(classes = "has-background-info-light") {
+                            td { strong("Attributed (sum of LOB rows)") } +
+                                    td { "Mapped via resource/package mappings" } +
+                                    td { strong { humanReadableByteCountSI(attributedTotal) } }
+                        } + tr {
+                            td { "Unattributed: Unmatched Files" } +
+                                    td { "${lob.unmatchedFiles.count} files" } +
+                                    td { humanReadableByteCountSI(unmatchedFilesBytes) }
+                        } + tr {
+                            td { "Unattributed: Unmatched DEX" } +
+                                    td { "${lob.unmatchedDex.count} packages" } +
+                                    td { humanReadableByteCountSI(unmatchedDexBytes) }
+                        } + tr(classes = "has-background-warning-light") {
+                            td { strong("Unattributed (total)") } +
+                                    td { "Unmatched files + unmatched DEX packages" } +
+                                    td { strong { humanReadableByteCountSI(unattributedTotal) } }
+                        } + tr(classes = "has-background-primary-light") {
+                            td { strong("Attributed + Unattributed") } +
+                                    td { "Primary LOB reconciled total" } +
+                                    td { strong { humanReadableByteCountSI(attributedPlusUnattributed) } }
+                        } + if (lob.summary.dexOverheadBytes > 0) {
+                            tr {
+                                td { "DEX Overhead" } +
+                                        td { "DEX structural bytes (${lob.summary.dexOverheadPercentOfDex}% of raw DEX)" } +
+                                        td { humanReadableByteCountSI(lob.summary.dexOverheadBytes) }
+                            }
+                        } else {
+                            tr { text("") }
+                        } + if (lob.summary.dexOverheadBytes > 0) {
+                            tr(classes = "has-background-link-light") {
+                                td { strong("Attributed + Unattributed + DEX Overhead") } +
+                                        td { "LOB total including non-package DEX bytes" } +
+                                        td { strong { humanReadableByteCountSI(effectiveTotalWithDexOverhead) } }
+                            }
+                        } else {
+                            tr { text("") }
+                        } + (artifactTotal?.let { total ->
+                            tr {
+                                td { artifactLabel } +
+                                        td { "From analyzed file groups (dex/resources/assets/native/other)" } +
+                                        td { humanReadableByteCountSI(total) }
+                            }
+                        } ?: tr { text("") }) + tr {
+                            td { sourceTotalLabel } +
+                                    td { sourceTotalNote } +
+                                    td { humanReadableByteCountSI(apkStats.apkSize) }
+                        } + tr {
+                            td { "${fileTypeLabel(apkStats)} Download Size" } +
+                                    td { "Estimated compressed download" } +
+                                    td { humanReadableByteCountSI(apkStats.downloadSize) }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private fun lobSummaryMetricCard(
+        title: String,
+        value: String,
+        subtitle: String,
+    ): BlockElement {
+        return div(classes = "column is-one-quarter-desktop is-half-tablet is-full-mobile") {
+            article(classes = "message is-light") {
+                div(classes = "message-body has-text-centered") {
+                    p(classes = "heading") { title } +
+                            p(classes = "title is-5 has-text-danger") { value } +
+                            p(classes = "is-size-7 has-text-grey") { subtitle }
+                }
+            }
+        }
+    }
+
+    // endregion
 
     // region AAB-specific sections
 

@@ -42,7 +42,7 @@ class BundleSizeProcessor(private val bundleHolder: BundleHolder) : SimpleProces
         try {
             ZipFile(dataHolder.primaryFile.file).use { zip ->
                 for (entry in zip.entries()) {
-                    compressedSizeMap[entry.name] = entry.compressedSize
+                    compressedSizeMap[entry.name] = entry.compressedSize.coerceAtLeast(0L)
                 }
             }
         } catch (e: Exception) {
@@ -86,11 +86,7 @@ class BundleSizeProcessor(private val bundleHolder: BundleHolder) : SimpleProces
             val path = entry.path.toString()
             // ZIP entry path = "moduleName/entryPath" (e.g. "base/dex/classes.dex")
             val zipPath = "$moduleName/$path"
-            val size = compressedSizeMap[zipPath] ?: try {
-                entry.content.size() // fallback to uncompressed if ZIP lookup fails
-            } catch (e: Exception) {
-                0L
-            }
+            val size = compressedSizeMap[zipPath] ?: 0L
             when {
                 path.startsWith("dex/") || path.endsWith(".dex") -> dexSize += size
                 path.startsWith("res/") || path == "resources.pb" -> resourcesSize += size

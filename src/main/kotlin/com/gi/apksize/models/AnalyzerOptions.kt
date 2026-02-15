@@ -104,6 +104,22 @@ data class AnalyzerOptions(
      */
     val appModulePrefixes: List<String> = listOf(),
 
+    //region AAB Analysis
+    /**
+     * For AAB inputs, generate an install-time APK (base + install-time feature modules)
+     * and run file/dex analysis on that APK instead of directly on bundle entries.
+     *
+     * If generation fails (for example missing aapt2), analyzer falls back to bundle-based analysis.
+     */
+    val useInstallTimeApkForAabAnalysis: Boolean = true,
+
+    /**
+     * Optional path to a bundletool device-spec JSON.
+     * When provided, conditional install-time modules are included only if they match this device.
+     */
+    val aabDeviceSpecPath: String = "",
+    //endregion
+
     //region Aapt Configs
 
     /**
@@ -160,6 +176,17 @@ data class AnalyzerOptions(
      * Default is 10 minutes.
      */
     val executionTimeOut: Long = 10,
+
+    //region LOB Analysis
+    /**
+     * Path to directory or zip file containing module mapping files
+     * (module-metadata.json, resource-mapping.json, package-mapping.json)
+     * produced by the module-size-analysis Gradle plugin.
+     * When set, LOB (functional unit) size analysis is performed.
+     * Supports both a directory path and a .zip file path.
+     */
+    val moduleMappingsPath: String = "",
+    //endregion
 ) {
 
     /**

@@ -18,7 +18,11 @@ import javax.swing.tree.TreeModel
 import kotlin.io.path.copyTo
 import kotlin.io.path.deleteIfExists
 
-class DexFileProcessor(private val dexProcessorHolder: DexProcessorHolder) : SimpleProcessor() {
+class DexFileProcessor(
+
+    private val dexProcessorHolder: DexProcessorHolder,
+    private val lobContext: LobContext? = null,
+) : SimpleProcessor() {
 
     /**
      * Calculates stats in the dex files (java/kotlin code) with sizes & other things.
@@ -39,15 +43,25 @@ class DexFileProcessor(private val dexProcessorHolder: DexProcessorHolder) : Sim
             Printer.log("No. of Dex Files: ${dexFilePaths.size}")
             val dexBackedDexList = mutableListOf<DexBackedDexFile>()
             val dexPackagesList = mutableListOf<DexPackageModel>()
+            val lobDexPackagesList = if (lobContext != null) mutableListOf<DexPackageModel>() else null
             val treeRoot = DexPackageTreeModel("root", 0L, 0, 0L)
             dexFilePaths.forEach {
                 val dexFile = DexFiles.getDexFile(it)
                 dexBackedDexList.add(dexFile)
                 Printer.log("Dex File: ${it.fileName}")
-                generateDexPackageModel(proguardMappingFile, dexFile, treeRoot, dexPackagesList, analyzerOptions)
+                generateDexPackageModel(proguardMappingFile, dexFile, treeRoot, dexPackagesList, analyzerOptions, lobDexPackagesList)
                 Printer.log("Processed Dex File: ${it.fileName}")
             }
             Printer.log("Processed All Dex Files")
+
+            // Collect unfiltered DEX packages for LOB analysis (no size filter, respects depth filter)
+            if (lobContext != null && lobDexPackagesList != null && lobDexPackagesList.isNotEmpty()) {
+                val lobUniqueList = lobDexPackagesList.groupBy { it.basePackage }.map { (pkg, entries) ->
+                    DexPackageModel(pkg, entries.sumOf { it.basePackageSize }, entries[0].depth)
+                }
+                lobContext.collectDexPackages(lobUniqueList)
+            }
+
             val uniquePackagesMap = dexPackagesList.groupBy { it.basePackage }
 
             val uniquePackageList = uniquePackagesMap.map {
@@ -86,7 +100,8 @@ class DexFileProcessor(private val dexProcessorHolder: DexProcessorHolder) : Sim
         dexBackedDex: DexBackedDexFile,
         treeModel: DexPackageTreeModel,
         dexPackagesList: MutableList<DexPackageModel>,
-        analyzerOptions: AnalyzerOptions
+        analyzerOptions: AnalyzerOptions,
+        lobPackagesList: MutableList<DexPackageModel>? = null,
     ) {
         val proguardMappings = if (proguardMappingFile != null) {
             val proguardMap = ProguardMap()
@@ -98,6 +113,17 @@ class DexFileProcessor(private val dexProcessorHolder: DexProcessorHolder) : Sim
         val rootNode: DexPackageNode =
             PackageTreeCreator(proguardMappings, proguardMappings != null)
                 .constructPackageTree(dexBackedDex)
+
+        // For LOB: traverse the full tree without size filter to capture all packages
+        if (lobPackagesList != null) {
+            for (i in 0 until rootNode.childCount) {
+                val child = rootNode.getChildAt(i)
+                if (child is DexPackageNode) {
+                    collectPackagesForLob(child, 1, lobPackagesList, analyzerOptions.dexPackagesMinDepth)
+                }
+            }
+        }
+
         val options = DexViewFilters()
         options.isShowFields = false
         options.isShowMethods = false
@@ -118,6 +144,30 @@ class DexFileProcessor(private val dexProcessorHolder: DexProcessorHolder) : Sim
                 1,
                 analyzerOptions
             )
+        }
+    }
+
+    /**
+     * Recursively collects ALL packages from the DEX tree for LOB analysis (no size filter).
+     * Only the depth filter is applied to avoid overlap with cumulative parent packages.
+     */
+    private fun collectPackagesForLob(
+        node: DexElementNode,
+        depth: Int,
+        lobList: MutableList<DexPackageModel>,
+        minDepth: Int,
+    ) {
+        if (depth > minDepth) {
+            val routePath = node.path.drop(1).joinToString(".") { (it as DexElementNode).name }
+            if (routePath.isNotEmpty()) {
+                lobList.add(DexPackageModel(routePath, node.size, depth))
+            }
+        }
+        for (i in 0 until node.childCount) {
+            val child = node.getChildAt(i)
+            if (child is DexPackageNode) {
+                collectPackagesForLob(child, depth + 1, lobList, minDepth)
+            }
         }
     }
 

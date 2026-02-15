@@ -24,22 +24,31 @@ fun main(args: Array<String>) {
         return
     }
     if (secondArgument.startsWith("--config=")) {
-        val jsonConfigPath = secondArgument.removePrefix("--config=")
-        val configFile = File(jsonConfigPath)
-        if (configFile.exists() && configFile.canRead()) {
-            val configString = configFile.readText()
-            try {
-                analyzerOptions = Gson().fromJson(configString, AnalyzerOptions::class.java)
-                if (analyzerOptions == null) {
-                    Printer.log("Config file should not be empty")
-                    return
-                }
-            } catch (e: Exception) {
-                Printer.log("Error reading config file : ${e.localizedMessage}")
+        val configInput = secondArgument.removePrefix("--config=").trim()
+        if (configInput.isBlank()) {
+            Printer.log("Config input should not be empty")
+            return
+        }
+        val configString = if (configInput.startsWith("{")) {
+            // Supports passing config directly as JSON: --config={"inputFilePath":"..."}
+            configInput
+        } else {
+            val configFile = File(configInput)
+            if (configFile.exists() && configFile.canRead()) {
+                configFile.readText()
+            } else {
+                Printer.log("Config file does not exists or can't be read")
                 return
             }
-        } else {
-            Printer.log("Config file does not exists or can't be read")
+        }
+        try {
+            analyzerOptions = Gson().fromJson(configString, AnalyzerOptions::class.java)
+            if (analyzerOptions == null) {
+                Printer.log("Config should not be empty")
+                return
+            }
+        } catch (e: Exception) {
+            Printer.log("Error reading config : ${e.localizedMessage}")
             return
         }
     } else {
@@ -112,6 +121,15 @@ fun updateOptions(args: Array<String>, analyzerOptions: AnalyzerOptions): Analyz
             }
             "--appPackagePrefix" -> {
                 options = options.copy(appPackagePrefix = listOf(optionValue))
+            }
+            "--moduleMappingsPath" -> {
+                options = options.copy(moduleMappingsPath = optionValue)
+            }
+            "--useInstallTimeApkForAabAnalysis" -> {
+                options = options.copy(useInstallTimeApkForAabAnalysis = optionValue != "false")
+            }
+            "--aabDeviceSpecPath" -> {
+                options = options.copy(aabDeviceSpecPath = optionValue)
             }
         }
     }

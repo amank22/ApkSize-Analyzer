@@ -22,7 +22,10 @@ import javax.swing.tree.TreeModel
  * 1. Embedded mapping from AAB at BUNDLE-METADATA/com.android.tools.build.obfuscation/proguard.map
  * 2. Externally provided mapping file via [DataHolder.primaryFile.proguardFile]
  */
-class BundleDexProcessor(private val bundleHolder: BundleHolder) : SimpleProcessor() {
+class BundleDexProcessor(
+    private val bundleHolder: BundleHolder,
+    private val lobContext: LobContext? = null,
+) : SimpleProcessor() {
 
     companion object {
         private const val OBFUSCATION_NAMESPACE = "com.android.tools.build.obfuscation"
@@ -67,6 +70,7 @@ class BundleDexProcessor(private val bundleHolder: BundleHolder) : SimpleProcess
 
         val dexBackedDexList = mutableListOf<DexBackedDexFile>()
         val dexPackagesList = mutableListOf<DexPackageModel>()
+        val lobDexPackagesList = if (lobContext != null) mutableListOf<DexPackageModel>() else null
         val treeRoot = DexPackageTreeModel("root", 0L, 0, 0L)
 
         for ((moduleName, module) in appBundle.modules) {
@@ -86,7 +90,7 @@ class BundleDexProcessor(private val bundleHolder: BundleHolder) : SimpleProcess
                     dexBackedDexList.add(dexFile)
 
                     Printer.log("Processing DEX: ${moduleName.name}/${dexEntry.path}")
-                    generateDexPackageModel(proguardFile, dexFile, treeRoot, dexPackagesList, analyzerOptions)
+                    generateDexPackageModel(proguardFile, dexFile, treeRoot, dexPackagesList, analyzerOptions, lobDexPackagesList)
 
                     Files.deleteIfExists(tempDexFile)
                 } catch (e: Exception) {
@@ -100,6 +104,14 @@ class BundleDexProcessor(private val bundleHolder: BundleHolder) : SimpleProcess
         // Clean up temp ProGuard file if it was extracted from AAB metadata
         if (proguardFile != null && proguardFile.name.startsWith("bundle-proguard-")) {
             proguardFile.delete()
+        }
+
+        // Collect unfiltered DEX packages for LOB analysis (no size filter, respects depth filter)
+        if (lobContext != null && lobDexPackagesList != null && lobDexPackagesList.isNotEmpty()) {
+            val lobUniqueList = lobDexPackagesList.groupBy { it.basePackage }.map { (pkg, entries) ->
+                DexPackageModel(pkg, entries.sumOf { it.basePackageSize }, entries[0].depth)
+            }
+            lobContext.collectDexPackages(lobUniqueList)
         }
 
         val uniquePackagesMap = dexPackagesList.groupBy { it.basePackage }
@@ -134,7 +146,8 @@ class BundleDexProcessor(private val bundleHolder: BundleHolder) : SimpleProcess
         dexBackedDex: DexBackedDexFile,
         treeModel: DexPackageTreeModel,
         dexPackagesList: MutableList<DexPackageModel>,
-        analyzerOptions: AnalyzerOptions
+        analyzerOptions: AnalyzerOptions,
+        lobPackagesList: MutableList<DexPackageModel>? = null,
     ) {
         val proguardMappings = if (proguardMappingFile != null) {
             val proguardMap = ProguardMap()
@@ -146,6 +159,17 @@ class BundleDexProcessor(private val bundleHolder: BundleHolder) : SimpleProcess
         val rootNode: DexPackageNode =
             PackageTreeCreator(proguardMappings, proguardMappings != null)
                 .constructPackageTree(dexBackedDex)
+
+        // For LOB: traverse the full tree without size filter to capture all packages
+        if (lobPackagesList != null) {
+            for (i in 0 until rootNode.childCount) {
+                val child = rootNode.getChildAt(i)
+                if (child is DexPackageNode) {
+                    collectPackagesForLob(child, 1, lobPackagesList, analyzerOptions.dexPackagesMinDepth)
+                }
+            }
+        }
+
         val options = DexViewFilters()
         options.isShowFields = false
         options.isShowMethods = false
@@ -166,6 +190,30 @@ class BundleDexProcessor(private val bundleHolder: BundleHolder) : SimpleProcess
                 1,
                 analyzerOptions
             )
+        }
+    }
+
+    /**
+     * Recursively collects ALL packages from the DEX tree for LOB analysis (no size filter).
+     * Only the depth filter is applied to avoid overlap with cumulative parent packages.
+     */
+    private fun collectPackagesForLob(
+        node: DexElementNode,
+        depth: Int,
+        lobList: MutableList<DexPackageModel>,
+        minDepth: Int,
+    ) {
+        if (depth > minDepth) {
+            val routePath = node.path.drop(1).joinToString(".") { (it as DexElementNode).name }
+            if (routePath.isNotEmpty()) {
+                lobList.add(DexPackageModel(routePath, node.size, depth))
+            }
+        }
+        for (i in 0 until node.childCount) {
+            val child = node.getChildAt(i)
+            if (child is DexPackageNode) {
+                collectPackagesForLob(child, depth + 1, lobList, minDepth)
+            }
         }
     }
 

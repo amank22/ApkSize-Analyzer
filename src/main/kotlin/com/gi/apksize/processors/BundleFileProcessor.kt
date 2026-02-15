@@ -11,7 +11,10 @@ import com.gi.apksize.utils.Printer
  * Iterates all entries across all modules, classifies them by type,
  * and populates top files, top images, group sizes.
  */
-class BundleFileProcessor(private val bundleHolder: BundleHolder) : SimpleProcessor() {
+class BundleFileProcessor(
+    private val bundleHolder: BundleHolder,
+    private val lobContext: LobContext? = null,
+) : SimpleProcessor() {
 
     override val name: String = "Bundle Top Files"
 
@@ -24,21 +27,27 @@ class BundleFileProcessor(private val bundleHolder: BundleHolder) : SimpleProces
         val topFilesList = arrayListOf<ApkFileData>()
         val topFilesFilteredList = arrayListOf<ApkFileData>()
         val topImagesList = arrayListOf<ApkFileData>()
+        val compressedSizeMap = mutableMapOf<String, Long>()
+        try {
+            for (zipEntry in bundleHolder.zipFile.entries()) {
+                compressedSizeMap[zipEntry.name] = zipEntry.compressedSize.coerceAtLeast(0L)
+            }
+        } catch (e: Exception) {
+            Printer.log("Could not read AAB ZIP for compressed sizes: ${e.message}")
+        }
 
         for ((moduleName, module) in appBundle.modules) {
             for (entry in module.entries) {
                 val entryPath = entry.path.toString()
                 // Prefix with module name for display (e.g., "base/dex/classes.dex")
                 val displayName = "${moduleName.name}/$entryPath"
-                val sizeInBytes = try {
-                    entry.content.size()
-                } catch (e: Exception) {
-                    0L
-                }
+                val sizeInBytes = compressedSizeMap[displayName] ?: 0L
                 val sizeInKb = sizeInBytes / Constants.BYTE_TO_KB_DIVIDER
 
                 val type = fileTypeLookup(entryPath)
                 val apkFileData = ApkFileData(displayName, sizeInBytes, sizeInKb, type, type.simpleFileName!!, moduleName = moduleName.name)
+                // Collect raw file data for LOB analysis (before any size filtering)
+                lobContext?.collectFile(displayName, sizeInBytes, type.fileType)
 
                 // Check for React Native bundle
                 if (entryPath == "assets/index.android.bundle") {
@@ -79,6 +88,21 @@ class BundleFileProcessor(private val bundleHolder: BundleHolder) : SimpleProces
         }
 
         fileTypeSizes.forEach { it.value.calculateGroupSize() }
+        val dexBytes = fileTypeSizes["dex"]?.groupSize ?: 0L
+        val resourcesBytes =
+            (fileTypeSizes["resources"]?.groupSize ?: 0L) + (fileTypeSizes["compileRes"]?.groupSize ?: 0L)
+        val assetsBytes = fileTypeSizes["assets"]?.groupSize ?: 0L
+        val nativeLibsBytes = fileTypeSizes["staticLibs"]?.groupSize ?: 0L
+        val totalBytes = fileTypeSizes.values.sumOf { it.groupSize ?: 0L }
+        val otherBytes = (totalBytes - dexBytes - resourcesBytes - assetsBytes - nativeLibsBytes).coerceAtLeast(0L)
+        apkStats.artifactSizeBreakdown = ArtifactSizeBreakdown(
+            dex = dexBytes,
+            resources = resourcesBytes,
+            assets = assetsBytes,
+            nativeLibs = nativeLibsBytes,
+            other = otherBytes,
+            total = totalBytes,
+        )
 
         val filteredSizes = hashMapOf<String, ApkGroupSizes>()
         fileTypeSizes.forEach {

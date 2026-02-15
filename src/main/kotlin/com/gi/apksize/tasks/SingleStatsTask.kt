@@ -3,6 +3,7 @@ package com.gi.apksize.tasks
 import com.gi.apksize.models.ApkStats
 import com.gi.apksize.models.DataHolder
 import com.gi.apksize.models.DexProcessorHolder
+import com.gi.apksize.models.LobContext
 import com.gi.apksize.processors.*
 import com.gi.apksize.utils.Printer
 import java.util.concurrent.ExecutorService
@@ -19,12 +20,27 @@ object SingleStatsTask : Task {
     override fun process(dataHolder: DataHolder): ApkStats {
         val apkStats = ApkStats()
         val analyzerOptions = dataHolder.analyzerOptions
+
+        // Load LOB mappings if configured
+        val lobContext = if (analyzerOptions.moduleMappingsPath.isNotBlank()) {
+            kotlin.runCatching {
+                val path = analyzerOptions.getPath(analyzerOptions.moduleMappingsPath)
+                LobContext.load(
+                    path = path,
+                    isAab = false,
+                    appPackagePrefixes = analyzerOptions.appPackagePrefix,
+                )
+            }.onFailure {
+                Printer.log("Failed to load LOB mappings: ${it.message}")
+            }.getOrNull()
+        } else null
+
         val numberOfProcessors = Runtime.getRuntime().availableProcessors()
         val pool: ExecutorService = Executors.newFixedThreadPool(numberOfProcessors)
         val processors: List<List<Processor<*>>> = buildList {
-            add(listOf(BasicSizeProcessor(false), ApkGeneralFileProcessor()))
+            add(listOf(BasicSizeProcessor(false), ApkGeneralFileProcessor(lobContext)))
             add(listOf(AaptProcessor()))
-            add(listOf(DexFileProcessor(DexProcessorHolder(isCompareFile = false, needAppPackages = true))))
+            add(listOf(DexFileProcessor(DexProcessorHolder(isCompareFile = false, needAppPackages = true), lobContext)))
         }
 
         processors.forEach { listOfProcess ->
@@ -52,6 +68,14 @@ object SingleStatsTask : Task {
                 "Execution timed-out. Try adjusting executionTimeOut value in config.json. " +
                         "Current is ${analyzerOptions.executionTimeOut} minutes"
             )
+        }
+
+        // Finalize LOB analysis after all processors complete
+        if (lobContext != null) {
+            apkStats.lobAnalysis = lobContext.buildResult()
+            apkStats.unmatchedDetails = lobContext.unmatchedDetails
+            apkStats.attributedDetails = lobContext.attributedDetails
+            apkStats.dexOverheadDetails = lobContext.dexOverheadDetails
         }
 
         return apkStats

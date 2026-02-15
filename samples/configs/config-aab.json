@@ -1,12 +1,11 @@
 {
-  "inputFilePath":"/samples/test/aab/app-release.aab",
-  "outputFolderPath":"/samples/outputs/",
+  "inputFilePath":"/Users/mmt10741/IdeaProjects/ApkSize-Analyzer/samples/test/aab/app-release.aab",
+  "outputFolderPath":"/Users/mmt10741/IdeaProjects/ApkSize-Analyzer/samples/test/outputs",
   "appName": "MakeMyTrip",
   "appPackagePrefix": [
     "com.makemytrip",
     "com.mmt",
     "com.gommt",
-    "com.panoramagl",
     "com.goibibo",
     "com.tripmoney"
   ],
@@ -17,6 +16,9 @@
     "com.goibibo",
     "com.tripmoney"
   ],
+  "useInstallTimeApkForAabAnalysis": true,
+  "aabDeviceSpecPath": "",
+  "moduleMappingsPath": "/Users/mmt10741/StudioProjects/APP-android/mobile/build/reports",
   "topFilesImagesSizeLimiter": 10240,
   "filteredFilesSizeLimiter": 5000,
   "filesListMaxCount": 50,

@@ -38,10 +38,17 @@ class ApkStats {
     var comparedDexStats : DexFileStats? = null
     var comparedDexPackages : List<DexPackageModel>? = null
     var comparedAppPackages : List<DexPackageModel>? = null
+    /** Overall file-category totals for the analyzed APK/AAB (derived from full file scan). */
+    var artifactSizeBreakdown: ArtifactSizeBreakdown? = null
 
     // region AAB-specific fields
     /** Type of input file analyzed (APK or AAB) */
     var inputFileType: InputFileType? = null
+    /**
+     * True when AAB analysis is executed on a generated install-time APK
+     * (base + install-time dynamic modules) for primary size/file/dex metrics.
+     */
+    var isInstallTimeApkAnalysis: Boolean? = null
     /** Per-module breakdown for AAB analysis */
     var bundleModules: List<BundleModuleInfo>? = null
     /** Maven dependencies extracted from AAB metadata */
@@ -64,9 +71,36 @@ class ApkStats {
     var estimatedDeviceSizes: List<EstimatedDeviceSize>? = null
     // endregion
 
+    // region LOB Analysis
+    /** LOB (functional unit) size analysis result. Transient — written to separate lob-analysis.json. */
+    @Transient
+    var lobAnalysis: LobAnalysisResult? = null
+
+    /** Detailed unmatched entries for LOB analysis. Transient — written to separate file. */
+    @Transient
+    var unmatchedDetails: UnmatchedDetails? = null
+
+    /** Per-LOB attributed file/dex details. Transient — written to separate file. */
+    @Transient
+    var attributedDetails: AttributedDetails? = null
+
+    /** DEX overhead breakdown. Transient — written to separate file. */
+    @Transient
+    var dexOverheadDetails: DexOverheadDetails? = null
+    // endregion
+
     fun json(): String {
         val gson = Gson()
         return gson.toJson(this)
     }
 
 }
+
+data class ArtifactSizeBreakdown(
+    val dex: Long,
+    val resources: Long,
+    val assets: Long,
+    val nativeLibs: Long,
+    val other: Long,
+    val total: Long,
+)
