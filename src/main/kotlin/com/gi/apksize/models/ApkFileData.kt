@@ -9,6 +9,7 @@ data class ApkFileData(
     val sizeInKb: Long,
     val fileType: ApkFileType,
     val simpleFileName: String,
+    val moduleName: String? = null,
 )
 
 data class ApkFileType(

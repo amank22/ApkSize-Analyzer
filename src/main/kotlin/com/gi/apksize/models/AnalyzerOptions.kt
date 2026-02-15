@@ -97,6 +97,29 @@ data class AnalyzerOptions(
     val dexPackagesSizeLimiter: Long = 51200L,
     //endregion
 
+    /**
+     * Group ID prefixes that identify your app's own modules in the dependencies list.
+     * Dependencies whose groupId starts with any of these prefixes are classified as "App Modules".
+     * Example: ["com.makemytrip", "com.mmt", "com.goibibo"]
+     */
+    val appModulePrefixes: List<String> = listOf(),
+
+    //region AAB Analysis
+    /**
+     * For AAB inputs, generate an install-time APK (base + install-time feature modules)
+     * and run file/dex analysis on that APK instead of directly on bundle entries.
+     *
+     * If generation fails (for example missing aapt2), analyzer falls back to bundle-based analysis.
+     */
+    val useInstallTimeApkForAabAnalysis: Boolean = true,
+
+    /**
+     * Optional path to a bundletool device-spec JSON.
+     * When provided, conditional install-time modules are included only if they match this device.
+     */
+    val aabDeviceSpecPath: String = "",
+    //endregion
+
     //region Aapt Configs
 
     /**
@@ -153,12 +176,35 @@ data class AnalyzerOptions(
      * Default is 10 minutes.
      */
     val executionTimeOut: Long = 10,
+
+    //region LOB Analysis
+    /**
+     * Path to directory or zip file containing module mapping files
+     * (module-metadata.json, resource-mapping.json, package-mapping.json)
+     * produced by the module-size-analysis Gradle plugin.
+     * When set, LOB (functional unit) size analysis is performed.
+     * Supports both a directory path and a .zip file path.
+     */
+    val moduleMappingsPath: String = "",
+    //endregion
 ) {
 
     /**
      * Returns path according to `arePathsAbsolute` value.
      * For relative paths, appends the base dir path.
      */
+    /**
+     * Detects the input file type based on the file extension.
+     * Returns [InputFileType.AAB] for .aab files, [InputFileType.APK] otherwise.
+     */
+    fun inputFileType(): InputFileType {
+        return if (inputFilePath.endsWith(".aab", ignoreCase = true)) {
+            InputFileType.AAB
+        } else {
+            InputFileType.APK
+        }
+    }
+
     fun getPath(path: String): String {
         return if (arePathsAbsolute) {
             path

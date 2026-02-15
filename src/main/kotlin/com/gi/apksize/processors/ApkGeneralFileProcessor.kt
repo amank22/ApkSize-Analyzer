@@ -6,7 +6,7 @@ import com.gi.apksize.utils.ApkSizeHelpers
 import com.gi.apksize.utils.Constants
 import java.nio.file.Path
 
-class ApkGeneralFileProcessor : SimpleProcessor() {
+class ApkGeneralFileProcessor(private val lobContext: LobContext? = null) : SimpleProcessor() {
 
     /**
      * Calculates file sizes of each and every file & filters them according to their type.
@@ -30,6 +30,8 @@ class ApkGeneralFileProcessor : SimpleProcessor() {
             val sizeInKb = sizeInBytes / Constants.BYTE_TO_KB_DIVIDER
             val type = fileTypeLookup(name)
             val apkFileData = ApkFileData(name, sizeInBytes, sizeInKb, type, type.simpleFileName!!)
+            // Collect raw file data for LOB analysis (before any size filtering)
+            lobContext?.collectFile(name, sizeInBytes, type.fileType)
             if (name == "assets/index.android.bundle") {
                 apkStats.reactBundleSize = sizeInBytes
                 apkStats.reactBundleSizeInMb = ApkSizeHelpers.roundOffDecimal(
@@ -66,6 +68,21 @@ class ApkGeneralFileProcessor : SimpleProcessor() {
         fileTypeSizes.forEach {
             it.value.calculateGroupSize()
         }
+        val dexBytes = fileTypeSizes["dex"]?.groupSize ?: 0L
+        val resourcesBytes =
+            (fileTypeSizes["resources"]?.groupSize ?: 0L) + (fileTypeSizes["compileRes"]?.groupSize ?: 0L)
+        val assetsBytes = fileTypeSizes["assets"]?.groupSize ?: 0L
+        val nativeLibsBytes = fileTypeSizes["staticLibs"]?.groupSize ?: 0L
+        val totalBytes = fileTypeSizes.values.sumOf { it.groupSize ?: 0L }
+        val otherBytes = (totalBytes - dexBytes - resourcesBytes - assetsBytes - nativeLibsBytes).coerceAtLeast(0L)
+        apkStats.artifactSizeBreakdown = ArtifactSizeBreakdown(
+            dex = dexBytes,
+            resources = resourcesBytes,
+            assets = assetsBytes,
+            nativeLibs = nativeLibsBytes,
+            other = otherBytes,
+            total = totalBytes,
+        )
         val filteredSizes = hashMapOf<String, ApkGroupSizes>()
         fileTypeSizes.forEach {
             if ((it.value.groupSize ?: 0L) >= analyzerOptions.filteredFilesSizeLimiter) {

@@ -1,19 +1,26 @@
 ![Logo](/screenshots/ApkSize.svg)
 
-ApkSize Analyzer is a command line java program to analyze the size of Apk and give report in multiple formats
-which you can then use in CI/CD environments (jenkins etc) to get deeper insights for your apk.
+ApkSize Analyzer is a command line java program to analyze the size of APK and AAB (Android App Bundle) files and give report in multiple formats
+which you can then use in CI/CD environments (jenkins etc) to get deeper insights for your app.
 
 It can also be used to compare two APKs and generate report of the differences. You can do it in Android Studio also right?
 This will give you differences on source packages level so that you know what code exactly increased and not just differences in dex files.
 
 #### Features:
-* Analyzes Apk for files, dex, resources.
+* Analyzes **APK** and **AAB** files for files, dex, resources.
 * Package level differences between two APKs.
 * The report generates JSON, HTML, pdf for easy integration and reading.
 * You can provide a specific app package prefix which will be reported separately for easy classification.
 * The package sizes are calculated as combination of all the dex files.
 * Included a separate list for the images listed according to decreasing size.
 * Most of the lists are sorted in the decreasing order of their sizes.
+
+**AAB-specific features:**
+* Per-module breakdown (base, feature modules) with component sizes (DEX, resources, assets, native libs)
+* Resource counting directly from resources.pb (no aapt2 needed)
+* Manifest info extraction (package name, version, min/target SDK)
+* Bundle config analysis (split dimensions, compression settings)
+* Maven dependency list from bundle metadata
 
 Example command to run analyzer:
 
@@ -42,7 +49,8 @@ For comparing 2 apks, along with apk paths, there are arguments for comparing.
 
     /**
      * Must
-     * Input apk file to test with.
+     * Input APK or AAB file to analyze.
+     * File type is auto-detected from the extension (.apk or .aab).
      */
     inputFilePath = ""
 
@@ -164,13 +172,22 @@ For comparing 2 apks, along with apk paths, there are arguments for comparing.
     disableFileByFileComparison = false
     
     
+**AAB Example:**
+
+`java -jar apkSize-0.3-all.jar relative --config=input/config-aab.json`
+
+Just point `inputFilePath` to an `.aab` file instead of an `.apk` file. The tool auto-detects the file type.
+For AAB files, resource analysis is done via bundletool library (no `aapt2Executor` needed).
+Note: Comparison (diff) mode is not yet supported for AAB files.
+
 #### Future tasks:
 * Add Test Cases
 * Integrate with CI/CD
 * Make proguard or other minification tool work and reduce the size
 * Make HTML report for appPackages more readable
 * Make it as a gradle plugin
-* Work to support the bundle files too. Currently, bundle files doesn't give dex results. 
+* AAB comparison (diff) mode support
+* PDF report generation
 
 Note: These items are not in the order
 

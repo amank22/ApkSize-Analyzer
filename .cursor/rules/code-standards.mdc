@@ -1,0 +1,187 @@
+---
+description: Code standards and architecture patterns for ApkSize-Analyzer — how to structure processors, tasks, models, UI generators, and utilities.
+globs: **/*.kt
+alwaysApply: false
+---
+
+# ApkSize-Analyzer Code Standards
+
+## Package Structure
+
+All source lives under `com.gi.apksize`. Organize code into these packages:
+
+| Package | Purpose |
+|---|---|
+| `models/` | Data classes, holder objects, stats containers |
+| `processors/` | Single-responsibility analysis units |
+| `tasks/` | Orchestration — wire processors together, manage threading |
+| `ui/` | Report generation (HTML, PDF) |
+| `utils/` | Pure helpers, constants, extension functions |
+
+The entry point `main.kt` lives at the root `src/main/kotlin/` and handles only CLI argument parsing and config loading.
+
+---
+
+## Processors
+
+Processors are the core analysis units. Each processor does **one thing** (e.g., basic sizes, DEX analysis, file breakdown, aapt resources).
+
+### When to create a new Processor
+
+- You have a **new, independent analysis concern** (e.g., native library analysis, manifest parsing).
+- The logic does NOT belong in an existing processor's responsibility.
+- Do NOT add unrelated logic to an existing processor just because it touches the same files.
+
+### How to write a Processor
+
+1. **Extend `SimpleProcessor`** for most cases. Only extend `Processor<T>` directly when you need extra input beyond `DataHolder`.
+
+```kotlin
+// GOOD — simple processor for a single concern
+class MyNewProcessor : SimpleProcessor() {
+
+    override val name: String = "My Analysis"
+
+    override fun process(dataHolder: DataHolder, apkStats: ApkStats) {
+        // Read inputs from dataHolder
+        // Compute results
+        // Write results into apkStats
+    }
+}
+```
+
+2. **If you need extra configuration**, pass it via a constructor-injected holder (like `DexProcessorHolder` or a boolean flag), not by modifying `DataHolder`.
+
+```kotlin
+// GOOD — extra config via constructor
+class DexFileProcessor(private val dexProcessorHolder: DexProcessorHolder) : SimpleProcessor() { ... }
+class BasicSizeProcessor(private val isComparingApk: Boolean) : SimpleProcessor() { ... }
+
+// BAD — adding ad-hoc fields to DataHolder for one processor's needs
+```
+
+3. **Override `postMsg()`** if the processor has meaningful completion status to report (see `AaptProcessor` for an example). Otherwise, rely on the defaults from `Processor`.
+
+4. **Keep all private helpers inside the processor class**. A processor should be self-contained. Do not scatter its logic across utility files.
+
+5. **Naming**: `<Concern>Processor.kt` — e.g., `BasicSizeProcessor`, `DexFileProcessor`, `AaptProcessor`.
+
+### Processor rules
+
+- Processors read from `DataHolder` and write into `ApkStats`.
+- Processors must be **thread-safe** — they run concurrently in a thread pool.
+- Do not call other processors from within a processor. Orchestration belongs in tasks.
+- Use `Printer.log()` for logging, never `println()` directly.
+
+---
+
+## Tasks
+
+Tasks orchestrate processors and manage execution flow. They do NOT contain analysis logic themselves.
+
+### When to create a new Task
+
+- You have a **new execution mode** (e.g., single analysis, comparison, a future "bundle analysis" mode).
+- Do NOT create a task for a sub-step — that is a processor.
+
+### How to write a Task
+
+1. **Implement the `Task` interface**.
+
+```kotlin
+object MyNewTask : Task {
+    override fun process(dataHolder: DataHolder): ApkStats {
+        val apkStats = ApkStats()
+        // Create and run processors
+        // Return populated apkStats
+        return apkStats
+    }
+}
+```
+
+2. **Use `object` declaration** for tasks (singleton pattern). Tasks are stateless orchestrators.
+
+3. **For parallel execution**, use a fixed thread pool sized to `Runtime.getRuntime().availableProcessors()` and group processors into lists submitted to the pool (see `SingleStatsTask`).
+
+4. **Respect `analyzerOptions.executionTimeOut`** when using thread pools.
+
+5. **Naming**: `<Mode>Task.kt` — e.g., `SingleStatsTask`, `CompareTask`.
+
+### Task rules
+
+- Tasks create processors, run them, and return `ApkStats`. They do not write files.
+- File output (JSON, HTML, aapt stats) is handled by `ApkSizeTask.evaluate()`, the top-level coordinator.
+- Add new tasks to `ApkSizeTask.evaluate()` with the appropriate mode check.
+
+---
+
+## Models
+
+### When to create a new Model
+
+- You need a **new data structure** for processor output (e.g., a new diff model, a new stats category).
+- You need a **new configuration holder** for processor input.
+
+### How to write a Model
+
+1. **Use `data class`** for all value-holding models.
+
+```kotlin
+data class MyNewModel(
+    val name: String,
+    val sizeInBytes: Long,
+    val sizeInKb: Long
+)
+```
+
+2. **Configuration models** use `data class` with default values and KDoc on each field (see `AnalyzerOptions`).
+
+3. **`ApkStats`** is the central output container. Add new nullable `var` fields to it when a processor produces new data. Keep fields nullable — not every mode populates every field.
+
+4. **`DataHolder`** is the central input container. It wraps `AnalyzerOptions`, file references, and output directory. Avoid adding processor-specific fields here; use constructor-injected holders instead.
+
+5. **Naming**: descriptive noun — `ApkFileData`, `DexPackageModel`, `DexPackageDiffModel`, `SizeModel`.
+
+---
+
+## UI Generators
+
+### When to create a new Generator
+
+- You need a **new output format** (e.g., Markdown, CSV).
+- You need a **separate report variant** (e.g., `DiffHtmlGenerator` vs `HtmlGenerator`).
+
+### How to write a Generator
+
+1. **Use `object` declaration** with a single public `getHtml()` (or `generate()`) function.
+2. Generators read from `ApkStats` — they never call processors.
+3. **Naming**: `<Format>Generator.kt` or `<Variant><Format>Generator.kt` — e.g., `HtmlGenerator`, `DiffHtmlGenerator`.
+
+---
+
+## Utilities
+
+### What belongs in utils
+
+- **Constants**: size dividers, magic numbers → `Constants.kt`
+- **Extension functions**: `DataHolder` factory functions → `DataHolders.kt`
+- **Logging**: use `Printer.log()` / `Printer.error()` everywhere.
+- **Pure helpers**: math rounding, formatting → `ApkSizeHelpers.kt`
+
+### What does NOT belong in utils
+
+- Analysis logic (→ processor)
+- Orchestration logic (→ task)
+- Data structures (→ models)
+
+---
+
+## General Kotlin Conventions
+
+- Use **KDoc (`/** */`)** on all public and non-trivial private functions.
+- Use **`when` expressions** for multi-branch classification (see `fileNameTypeExtractor`).
+- Prefer **immutable collections** (`listOf`, `mapOf`) unless mutation is required by the algorithm.
+- Use **`sortedByDescending`** and **`.take(n)`** for top-N patterns rather than manual loops.
+- Prefer **extension functions** (in utils) over adding methods to unrelated classes.
+- Use `Printer.log()` for all logging. Never use raw `println()`.
+- Wrap risky operations in `runCatching { }` with `.onFailure` logging (see `SingleStatsTask`).
