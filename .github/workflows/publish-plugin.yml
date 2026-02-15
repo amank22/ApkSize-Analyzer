@@ -1,0 +1,90 @@
+name: Publish Gradle Plugin
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'android-gradle-plugin/**'
+  workflow_dispatch:
+    inputs:
+      force_publish:
+        description: 'Force publish even if version unchanged'
+        required: false
+        default: 'false'
+        type: boolean
+
+permissions:
+  contents: write          # needed to create git tags
+
+env:
+  JAVA_VERSION: '17'
+
+jobs:
+  publish:
+    name: Publish to Gradle Plugin Portal
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # full history for tag comparison
+
+      - name: Extract plugin version from build.gradle.kts
+        id: version
+        run: |
+          VERSION=$(grep -oP "^version\s*=\s*\"\K[^\"]*" android-gradle-plugin/build.gradle.kts)
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Plugin version: $VERSION"
+
+      - name: Check if version already published (tag exists)
+        id: check
+        run: |
+          TAG="gradle-plugin-v${{ steps.version.outputs.version }}"
+          if git rev-parse "refs/tags/$TAG" >/dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "Tag $TAG already exists — version unchanged."
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+            echo "Tag $TAG does not exist — new version detected."
+          fi
+
+      - name: Skip if version unchanged (unless forced)
+        if: steps.check.outputs.exists == 'true' && github.event.inputs.force_publish != 'true'
+        run: |
+          echo "Version ${{ steps.version.outputs.version }} already published. Skipping."
+          echo "Use workflow_dispatch with force_publish=true to re-publish."
+          exit 0
+
+      - name: Set up JDK ${{ env.JAVA_VERSION }}
+        if: steps.check.outputs.exists == 'false' || github.event.inputs.force_publish == 'true'
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: ${{ env.JAVA_VERSION }}
+
+      - name: Cache Gradle
+        if: steps.check.outputs.exists == 'false' || github.event.inputs.force_publish == 'true'
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-plugin-${{ hashFiles('android-gradle-plugin/**/*.gradle*', 'gradle/wrapper/gradle-wrapper.properties') }}
+          restore-keys: gradle-plugin-
+
+      - name: Build plugin
+        if: steps.check.outputs.exists == 'false' || github.event.inputs.force_publish == 'true'
+        run: ./gradlew :android-gradle-plugin:build --no-daemon
+
+      - name: Publish to Gradle Plugin Portal
+        if: steps.check.outputs.exists == 'false' || github.event.inputs.force_publish == 'true'
+        env:
+          GRADLE_PUBLISH_KEY: ${{ secrets.GRADLE_PUBLISH_KEY }}
+          GRADLE_PUBLISH_SECRET: ${{ secrets.GRADLE_PUBLISH_SECRET }}
+        run: ./gradlew :android-gradle-plugin:publishPlugins --no-daemon
+
+      - name: Tag published version
+        if: steps.check.outputs.exists == 'false' || github.event.inputs.force_publish == 'true'
+        run: |
+          TAG="gradle-plugin-v${{ steps.version.outputs.version }}"
+          git tag "$TAG"
+          git push origin "$TAG"

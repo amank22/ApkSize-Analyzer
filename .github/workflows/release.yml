@@ -76,10 +76,11 @@ jobs:
             os: macos-latest         # Apple Silicon runners
             artifact-suffix: macos-arm64
             binary-name: apksize
-          - name: windows-x64
-            os: windows-latest
-            artifact-suffix: windows-x64
-            binary-name: apksize.exe
+          # Windows disabled until gradlew.bat is added to the repo
+          # - name: windows-x64
+          #   os: windows-latest
+          #   artifact-suffix: windows-x64
+          #   binary-name: apksize.exe
     steps:
       - uses: actions/checkout@v4
 
@@ -108,10 +109,6 @@ jobs:
       - name: Rename binary with platform suffix (Unix)
         if: runner.os != 'Windows'
         run: mv build/native/${{ matrix.binary-name }} build/native/apksize-${{ matrix.artifact-suffix }}
-
-      - name: Rename binary with platform suffix (Windows)
-        if: runner.os == 'Windows'
-        run: move build\native\${{ matrix.binary-name }} build\native\apksize-${{ matrix.artifact-suffix }}.exe
 
       - name: Upload native artifact
         uses: actions/upload-artifact@v4
