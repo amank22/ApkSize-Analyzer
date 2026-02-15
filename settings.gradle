@@ -6,14 +6,22 @@ pluginManagement {
         mavenCentral()
     }
 }
+
+plugins {
+    // Toolchain resolver — enables Gradle to auto-download JDKs (including GraalVM) for jvmToolchain
+    id 'org.gradle.toolchains.foojay-resolver-convention' version '0.9.0'
+}
+
 dependencyResolutionManagement {
     repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
     repositories {
         mavenLocal()
         google()
         mavenCentral()
-        maven { url 'https://jitpack.io' }
-        maven { url 'https://s01.oss.sonatype.org/content/repositories/snapshots' }
+        // R8 8.x releases (needed for the R8 shrink/minify step on the lite JAR)
+        maven { url = 'https://storage.googleapis.com/r8-releases/raw' }
+        maven { url = 'https://jitpack.io' }
+        maven { url = 'https://s01.oss.sonatype.org/content/repositories/snapshots' }
     }
 }
 rootProject.name = 'apkSize'

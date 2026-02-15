@@ -51,6 +51,8 @@ fun main(args: Array<String>) {
             Printer.log("Error reading config : ${e.localizedMessage}")
             return
         }
+        // Apply any extra CLI overrides on top of config (e.g. --bundletoolJarPath)
+        analyzerOptions = updateOptions(args, analyzerOptions)
     } else {
 
         val input = args[1]
@@ -130,6 +132,9 @@ fun updateOptions(args: Array<String>, analyzerOptions: AnalyzerOptions): Analyz
             }
             "--aabDeviceSpecPath" -> {
                 options = options.copy(aabDeviceSpecPath = optionValue)
+            }
+            "--bundletoolJarPath" -> {
+                options = options.copy(bundletoolJarPath = optionValue)
             }
         }
     }
