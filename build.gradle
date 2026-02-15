@@ -56,14 +56,10 @@ kotlin {
     jvmToolchain(21)
 }
 
-java {
-    toolchain {
-        languageVersion = JavaLanguageVersion.of(21)
-        // Enables Gradle to select JDKs with native-image support (GraalVM)
-        // Gradle 8.14+ feature — used when building native binaries
-        nativeImageCapable = true
-    }
-}
+// Note: Do NOT set nativeImageCapable=true in the global java.toolchain block —
+// it forces ALL tasks (compileJava, distTar, etc.) to require a GraalVM JDK,
+// breaking builds on plain Temurin/Corretto. The nativeImageLite task resolves
+// native-image via GRAALVM_HOME instead.
 
 application {
     mainClass.set('MainKt')
