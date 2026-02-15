@@ -58,7 +58,7 @@ jobs:
           retention-days: 7
 
   # -------------------------------------------------------------------------
-  #  Build native binaries (matrix: Linux x64, macOS ARM64)
+  #  Build native binaries (matrix: Linux x64, macOS ARM64, Windows x64)
   #  Note: macOS x64 (macos-13) runners were deprecated by GitHub.
   # -------------------------------------------------------------------------
   build-native:
@@ -71,9 +71,15 @@ jobs:
           - name: linux-x64
             os: ubuntu-latest
             artifact-suffix: linux-x64
+            binary-name: apksize
           - name: macos-arm64
             os: macos-latest         # Apple Silicon runners
             artifact-suffix: macos-arm64
+            binary-name: apksize
+          - name: windows-x64
+            os: windows-latest
+            artifact-suffix: windows-x64
+            binary-name: apksize.exe
     steps:
       - uses: actions/checkout@v4
 
@@ -99,14 +105,19 @@ jobs:
       - name: Build native image
         run: ./gradlew nativeImageLite --no-daemon
 
-      - name: Rename binary with platform suffix
-        run: mv build/native/apksize build/native/apksize-${{ matrix.artifact-suffix }}
+      - name: Rename binary with platform suffix (Unix)
+        if: runner.os != 'Windows'
+        run: mv build/native/${{ matrix.binary-name }} build/native/apksize-${{ matrix.artifact-suffix }}
+
+      - name: Rename binary with platform suffix (Windows)
+        if: runner.os == 'Windows'
+        run: move build\native\${{ matrix.binary-name }} build\native\apksize-${{ matrix.artifact-suffix }}.exe
 
       - name: Upload native artifact
         uses: actions/upload-artifact@v4
         with:
           name: native-${{ matrix.artifact-suffix }}
-          path: build/native/apksize-${{ matrix.artifact-suffix }}
+          path: build/native/apksize-${{ matrix.artifact-suffix }}*
           retention-days: 7
 
   # -------------------------------------------------------------------------

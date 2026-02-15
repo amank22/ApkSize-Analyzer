@@ -34,6 +34,7 @@ Grab the latest release from [GitHub Releases](../../releases). Each release inc
 | `apkSize-*-lite-r8.jar` | R8-minified JAR (~5 MB). For AAB, supply an external bundletool JAR. |
 | `apksize-linux-x64` | Native binary for Linux x64 (no JDK needed). |
 | `apksize-macos-arm64` | Native binary for macOS Apple Silicon (no JDK needed). |
+| `apksize-windows-x64.exe` | Native binary for Windows x64 (no JDK needed). |
 
 #### Usage
 
