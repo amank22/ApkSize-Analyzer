@@ -1,0 +1,1904 @@
+/**
+ * Module Size Analysis - Gradle Script Plugin
+ *
+ * Analyzes Android module and AAR dependencies to extract:
+ *   - Resource counts (from R.txt, with declared vs transitive split)
+ *   - Package/class info (from classes.jar, at configurable depth)
+ *   - Native library details (from jni/ folder)
+ *
+ * Usage:
+ *   // root build.gradle
+ *   if (findProperty('enableModuleSizeAnalysis')?.toBoolean()) {
+ *       apply from: "$rootProject.projectDir/module-size-analysis.gradle"
+ *   }
+ *
+ *   // Then run:
+ *   ./gradlew :mobile:analyzeModuleSizes -PenableModuleSizeAnalysis=true
+ *
+ *   // With overrides:
+ *   ./gradlew :mobile:analyzeModuleSizes \
+ *       -PenableModuleSizeAnalysis=true \
+ *       -PmoduleSizeAnalysis.variant=standardRelease \
+ *       -PmoduleSizeAnalysis.packageDepth=4
+ */
+
+import groovy.json.JsonOutput
+import java.util.zip.ZipFile
+import java.util.zip.ZipEntry
+import java.util.zip.ZipInputStream
+import org.gradle.api.artifacts.component.ProjectComponentIdentifier
+
+// ---------------------------------------------------------------------------
+// Extension class for configuration
+// ---------------------------------------------------------------------------
+class ModuleSizeAnalysisExtension {
+    /** Build variant to analyze (e.g. 'release', 'standardRelease') */
+    String variant = 'release'
+
+    /**
+     * Glob patterns for modules to include.
+     * Matched against 'group:artifact' (remote) or ':project-path' (local).
+     * Use '*' as wildcard. Default: include everything.
+     */
+    List<String> includePatterns = ['*']
+
+    /**
+     * Glob patterns for modules to exclude.
+     * Applied after includePatterns.
+     */
+    List<String> excludePatterns = []
+
+    /**
+     * Whether to include local project modules (dependencies declared as project(':xyz')).
+     * When false, only remote (Maven/AAR/JAR) dependencies are analyzed.
+     * Default: true
+     */
+    boolean includeLocalModules = true
+
+    /**
+     * How many levels deep to go when grouping classes by package.
+     * e.g. depth=3: com.example.lib
+     *      depth=4: com.example.lib.utils
+     */
+    int packageDepth = 3
+
+    /** Output file path for the JSON report */
+    File outputFile
+
+    /** Output file path for the resource mapping JSON */
+    File resourceMappingFile
+
+    /** The target app module path (e.g. ':mobile', ':app'). Auto-detected if null. */
+    String appModule = null
+
+    /** Enable/disable the module analysis step (resources, classes, native libs per module) */
+    boolean enableModuleAnalysis = true
+
+    /** Enable/disable the resource mapping step (filePath -> module mapping) */
+    boolean enableResourceMapping = true
+
+    /**
+     * Output file path for the shared metadata JSON (modules list, FU mapping, etc.).
+     * Both module-analysis and resource-mapping reports reference this file.
+     */
+    File metadataFile
+
+    /**
+     * Mapping of functional unit name to list of glob patterns.
+     * Modules matching a pattern are assigned to that functional unit.
+     * Modules not matching any pattern are auto-assigned to "android_platform"
+     * (androidx, com.google, etc.) or "thirdparty" (everything else).
+     * Example:
+     *   functionalUnitMapping = [
+     *       "hotels"   : ["com.mmt:mmt-hotels*", ":mmt-home*"],
+     *       "flights"  : ["com.mmt:mmt-flights*", "com.mmt:mmt-skywalker*"],
+     *       "payments" : ["com.gommt:pay*", ":mmt-payments"],
+     *   ]
+     */
+    Map<String, List<String>> functionalUnitMapping = [:]
+
+    /** Output file path for the package mapping JSON (package -> modules reverse index) */
+    File packageMappingFile
+
+    /**
+     * Minimum package depth to include in packageMapping.
+     * Filters out shallow/noise packages (obfuscated single-segment names, etc.).
+     * e.g. depth 2 skips "QVItQF" (depth 1), keeps "com.mmt" (depth 2).
+     * Default: 3 (skips "com.mmt" level, keeps "com.mmt.hotel").
+     */
+    int minPackageDepth = 3
+
+    /**
+     * Manual overrides for specific package prefixes in packageMapping.
+     * Value can be "ignore" to exclude, or an FU name to force-assign.
+     * Example:
+     *   packageOverrides = [
+     *       "hilt_aggregated_deps" : "ignore",
+     *       "QVItQF"               : "ignore",
+     *       "(default)"            : "ignore",
+     *   ]
+     */
+    Map<String, String> packageOverrides = [:]
+
+    // File-path-based FU overrides for resource mapping.
+    // Lets you re-attribute specific files to an FU directly, bypassing the
+    // module-level FU assignment.  The consumer tool should check these
+    // overrides (glob matched against the file path in resource-mapping)
+    // before falling back to module -> FU lookup.
+    //
+    // Key   = FU name
+    // Value = list of glob patterns matched against resource-mapping file paths
+    //
+    // Example:
+    //   resourceFUOverrides = [
+    //       "reactnative" : ["base/assets/index.android.bundle*"],
+    //       "adtech"      : ["*/assets/mmt_ad_*"],
+    //   ]
+    Map<String, List<String>> resourceFUOverrides = [:]
+
+    // Directory-based FU overrides for resource mapping.
+    // All resource files found in these directories are attributed directly to the FU,
+    // bypassing module-level attribution. Paths are relative to the app module's project dir.
+    //
+    // Key   = FU name
+    // Value = list of directory paths (relative to app module project dir)
+    //
+    // Example:
+    //   resourceDirFUOverrides = [
+    //       "reactnative" : ["react-native-build/res"],
+    //   ]
+    Map<String, List<String>> resourceDirFUOverrides = [:]
+}
+
+// ---------------------------------------------------------------------------
+// Helper: simple glob matching (supports * wildcard)
+// ---------------------------------------------------------------------------
+def globMatches(String pattern, String value) {
+    // Convert glob to regex: escape dots, replace * with .*
+    String regex = pattern
+        .replace('.', '\\.')
+        .replace('*', '.*')
+    return value.matches(regex)
+}
+
+def shouldInclude(String moduleId, List<String> includePatterns, List<String> excludePatterns) {
+    // Normalize: replace ':' with '.' so patterns like "com.mmt.*" match "com.mmt:mmt-hotels"
+    // This way "com.mmt.*" matches both "com.mmt.react-native-libs" and "com.mmt:mmt-hotels"
+    def normalizedId = moduleId.replace(':', '.')
+    boolean included = includePatterns.any { pattern -> globMatches(pattern, normalizedId) }
+    if (!included) return false
+    boolean excluded = excludePatterns.any { pattern -> globMatches(pattern, normalizedId) }
+    return !excluded
+}
+
+// ---------------------------------------------------------------------------
+// Extractor: R.txt parser
+// ---------------------------------------------------------------------------
+def parseRTxt(String content) {
+    def resourceSet = new LinkedHashSet<String>() // "type:name" for dedup
+    def byType = [:].withDefault { 0 }
+
+    content.eachLine { line ->
+        line = line.trim()
+        if (line.isEmpty()) return
+        // Format: int|int[] <type> <name> <value>
+        def parts = line.split('\\s+', 4)
+        if (parts.length >= 3) {
+            def type = parts[1]
+            def name = parts[2]
+            def key = "${type}:${name}"
+            resourceSet.add(key)
+        }
+    }
+
+    // Count by type from deduplicated set
+    resourceSet.each { key ->
+        def type = key.split(':')[0]
+        byType[type] = (byType[type] ?: 0) + 1
+    }
+
+    return [total: resourceSet.size(), byType: byType]
+}
+
+/**
+ * Scan res/ entries inside a zip to get declared resource folder types.
+ * Returns set of "type:filename" strings.
+ */
+def scanResFolder(ZipFile zip) {
+    def declaredSet = new LinkedHashSet<String>()
+    zip.entries().each { ZipEntry entry ->
+        def name = entry.getName()
+        // Match res/<type-qualifier>/filename
+        if (name.startsWith('res/') && !entry.isDirectory()) {
+            def pathParts = name.split('/')
+            if (pathParts.length >= 3) {
+                // e.g. res/drawable-hdpi/icon.png -> type=drawable, file=icon
+                def folderName = pathParts[1]
+                def resType = folderName.split('-')[0] // strip qualifier
+                def fileName = pathParts[pathParts.length - 1]
+                def baseName = fileName.contains('.') ? fileName.substring(0, fileName.lastIndexOf('.')) : fileName
+                declaredSet.add("${resType}:${baseName}")
+            }
+        }
+    }
+    return declaredSet
+}
+
+/**
+ * Scan file entries inside a zip (AAR/JAR) that are meaningful for size mapping.
+ * Skips: dex, build metadata, jars, META-INF, data-binding, merged values XMLs.
+ */
+def scanFilePathsFromZip(ZipFile zip) {
+    def paths = []
+    def skipFiles = ['R.txt', 'proguard.txt', 'AndroidManifest.xml',
+                     'public.txt', 'annotations.zip', 'lint.jar'] as Set
+    def skipPrefixes = ['META-INF/', 'data-binding/', 'data-binding-base-class-log/']
+    zip.entries().each { ZipEntry entry ->
+        if (entry.isDirectory()) return
+        def name = entry.getName()
+        // Skip dex and jar files (not useful for per-file mapping)
+        if (name.endsWith('.dex') || name.endsWith('.jar')) return
+        // Skip metadata prefixes (present in every AAR)
+        if (skipPrefixes.any { name.startsWith(it) }) return
+        // Skip known metadata files
+        def fileName = name.contains('/') ? name.substring(name.lastIndexOf('/') + 1) : name
+        if (skipFiles.contains(fileName)) return
+        // Skip merged values XMLs (res/values*/values.xml) — present in most AARs
+        if (name.matches('res/values[^/]*/values\\.xml')) return
+        // Normalize jni/ -> lib/ to match APK format (AARs use jni/, APKs use lib/)
+        if (name.startsWith('jni/')) {
+            paths << 'lib/' + name.substring(4)
+        } else {
+            paths << name
+        }
+    }
+    return paths
+}
+
+/**
+ * Scan file paths from a local module's source directories.
+ * When a Gradle Project reference is provided, reads android.sourceSets.main.res.srcDirs
+ * (and assets.srcDirs) so that custom/nested resource directories are handled correctly.
+ * Falls back to scanning src/main/res, src/main/assets, src/main/jniLibs when no project.
+ *
+ * Returns list of relative paths like "res/drawable-xhdpi/splash.webp",
+ * "assets/fonts/roboto.ttf", "lib/arm64-v8a/libfoo.so"
+ */
+def scanFilePathsFromLocalModule(File moduleDir, project = null) {
+    def paths = []
+
+    // --- Resources ---
+    // Read actual res.srcDirs from Android source sets when project is available.
+    // Modules can declare nested source dirs (e.g. 'src/main/res/newhomepage')
+    // which are independent resource roots, not resource-type folders.
+    def resDirs = []
+    if (project != null) {
+        try {
+            def androidExt = project.extensions.findByName('android')
+            if (androidExt != null) {
+                def mainSourceSet = androidExt.sourceSets.findByName('main')
+                if (mainSourceSet != null) {
+                    mainSourceSet.res.srcDirs.each { dir ->
+                        if (dir.exists() && dir.isDirectory()) resDirs.add(dir)
+                    }
+                }
+            }
+        } catch (Exception ignored) {}
+    }
+    if (resDirs.isEmpty()) {
+        def defaultDir = new File(moduleDir, "src/main/res")
+        if (defaultDir.exists() && defaultDir.isDirectory()) resDirs.add(defaultDir)
+    }
+
+    // Canonical paths of all declared source dirs — used to skip nested dirs
+    // that are themselves source roots (e.g. src/main/res/newhomepage is a subdir
+    // of src/main/res but also a separate source root).
+    def resDirCanonicalPaths = resDirs.collect { it.canonicalPath }.toSet()
+
+    resDirs.each { resDir ->
+        resDir.eachDir { typeDir ->
+            // Skip if this subdir is itself a declared resource source dir
+            if (resDirCanonicalPaths.contains(typeDir.canonicalPath)) return
+            typeDir.eachFileRecurse { file ->
+                if (!file.isDirectory()) {
+                    paths << "res/${typeDir.name}/${file.name}"
+                }
+            }
+        }
+    }
+
+    // --- Assets ---
+    def assetsDirs = []
+    if (project != null) {
+        try {
+            def androidExt = project.extensions.findByName('android')
+            if (androidExt != null) {
+                def mainSourceSet = androidExt.sourceSets.findByName('main')
+                if (mainSourceSet != null) {
+                    mainSourceSet.assets.srcDirs.each { dir ->
+                        if (dir.exists() && dir.isDirectory()) assetsDirs.add(dir)
+                    }
+                }
+            }
+        } catch (Exception ignored) {}
+    }
+    if (assetsDirs.isEmpty()) {
+        def defaultDir = new File(moduleDir, "src/main/assets")
+        if (defaultDir.exists() && defaultDir.isDirectory()) assetsDirs.add(defaultDir)
+    }
+
+    assetsDirs.each { assetsDir ->
+        assetsDir.eachFileRecurse { file ->
+            if (!file.isDirectory()) {
+                def relPath = file.absolutePath.substring(assetsDir.absolutePath.length() + 1)
+                paths << "assets/${relPath}"
+            }
+        }
+    }
+
+    // --- JNI libs ---
+    def jniDir = new File(moduleDir, "src/main/jniLibs")
+    if (jniDir.exists() && jniDir.isDirectory()) {
+        jniDir.eachFileRecurse { file ->
+            if (!file.isDirectory()) {
+                def relPath = file.absolutePath.substring(jniDir.absolutePath.length() + 1)
+                paths << "lib/${relPath}"  // normalize to lib/ to match APK format
+            }
+        }
+    }
+
+    return paths
+}
+
+def extractResources(ZipFile zip) {
+    def result = [
+        declared: [total: 0, byType: [:]],
+        totalRTxtEntries: 0,
+        transitive: 0,
+        warnings: []
+    ]
+
+    // Try R.txt first
+    def rTxtEntry = zip.getEntry('R.txt')
+    String rTxtContent = null
+    if (rTxtEntry != null) {
+        rTxtContent = zip.getInputStream(rTxtEntry).text
+    }
+
+    // Scan res/ folder for declared resources
+    def declaredResSet = scanResFolder(zip)
+    def declaredByType = [:].withDefault { 0 }
+    declaredResSet.each { key ->
+        def type = key.split(':')[0]
+        declaredByType[type] = (declaredByType[type] ?: 0) + 1
+    }
+
+    if (rTxtContent != null && !rTxtContent.trim().isEmpty()) {
+        def parsed = parseRTxt(rTxtContent)
+        result.totalRTxtEntries = parsed.total
+        result.declared = [total: declaredResSet.size(), byType: declaredByType]
+        result.transitive = Math.max(0, parsed.total - declaredResSet.size())
+    } else {
+        // No R.txt -- use res/ scan as the sole source
+        result.declared = [total: declaredResSet.size(), byType: declaredByType]
+        result.totalRTxtEntries = declaredResSet.size()
+        result.transitive = 0
+        if (declaredResSet.isEmpty()) {
+            result.warnings << 'No R.txt and no res/ folder found'
+        } else {
+            result.warnings << 'No R.txt found; resource counts from res/ folder scan only'
+        }
+    }
+
+    return result
+}
+
+/**
+ * Extract resources from local module build intermediates.
+ */
+def extractResourcesFromLocalModule(File projectDir, String variant) {
+    def result = [
+        declared: [total: 0, byType: [:]],
+        totalRTxtEntries: 0,
+        transitive: 0,
+        warnings: []
+    ]
+
+    // Try to find R.txt in intermediates
+    def possibleRTxtPaths = [
+        new File(projectDir, "build/intermediates/runtime_symbol_list/${variant}/R.txt"),
+        new File(projectDir, "build/intermediates/runtime_symbol_list/${variant}/out/R.txt"),
+    ]
+
+    // Also try without variant (some AGP versions)
+    def variantParts = splitVariant(variant)
+    variantParts.each { v ->
+        possibleRTxtPaths << new File(projectDir, "build/intermediates/runtime_symbol_list/${v}/R.txt")
+        possibleRTxtPaths << new File(projectDir, "build/intermediates/runtime_symbol_list/${v}/out/R.txt")
+    }
+
+    File rTxtFile = possibleRTxtPaths.find { it.exists() }
+
+    // Try to find the AAR output for res/ scanning
+    def aarDir = new File(projectDir, "build/outputs/aar")
+    File aarFile = null
+    if (aarDir.exists()) {
+        aarFile = aarDir.listFiles()?.find { it.name.endsWith('.aar') }
+    }
+
+    // Count declared resources from res/ source sets
+    def resDir = new File(projectDir, "src/main/res")
+    def declaredResSet = new LinkedHashSet<String>()
+    if (resDir.exists()) {
+        resDir.eachDir { typeDir ->
+            def resType = typeDir.name.split('-')[0]
+            typeDir.eachFile { file ->
+                if (!file.isDirectory()) {
+                    def baseName = file.name.contains('.') ? file.name.substring(0, file.name.lastIndexOf('.')) : file.name
+                    declaredResSet.add("${resType}:${baseName}")
+                }
+            }
+        }
+    } else if (aarFile != null) {
+        // Fall back to AAR's res/ entries
+        try {
+            def zip = new ZipFile(aarFile)
+            declaredResSet = scanResFolder(zip)
+            zip.close()
+        } catch (Exception e) {
+            result.warnings << "Failed to scan AAR res/: ${e.message}"
+        }
+    }
+
+    def declaredByType = [:].withDefault { 0 }
+    declaredResSet.each { key ->
+        def type = key.split(':')[0]
+        declaredByType[type] = (declaredByType[type] ?: 0) + 1
+    }
+
+    if (rTxtFile != null) {
+        def parsed = parseRTxt(rTxtFile.text)
+        result.totalRTxtEntries = parsed.total
+        result.declared = [total: declaredResSet.size(), byType: declaredByType]
+        result.transitive = Math.max(0, parsed.total - declaredResSet.size())
+    } else {
+        result.declared = [total: declaredResSet.size(), byType: declaredByType]
+        result.totalRTxtEntries = declaredResSet.size()
+        result.transitive = 0
+        if (declaredResSet.isEmpty()) {
+            result.warnings << 'No R.txt and no res/ folder found (has the module been built?)'
+        } else {
+            result.warnings << 'No R.txt found; resource counts from source res/ folder only'
+        }
+    }
+
+    return result
+}
+
+// ---------------------------------------------------------------------------
+// Extractor: classes.jar / JAR package scanner
+// ---------------------------------------------------------------------------
+
+/**
+ * Truncate a package name to the given depth.
+ * e.g. "com.example.lib.utils.helper" at depth 3 -> "com.example.lib"
+ */
+def truncatePackage(String pkg, int depth) {
+    def parts = pkg.split('\\.')
+    if (parts.length <= depth) return pkg
+    return parts[0..<depth].join('.')
+}
+
+/**
+ * Scan a JAR/classes.jar for .class entries, return package -> classCount map.
+ * Stores FULL package names (no truncation). Consumer can aggregate at any depth.
+ */
+def scanClassesFromStream(InputStream inputStream) {
+    def packages = [:].withDefault { 0 }
+    int totalClasses = 0
+
+    try {
+        def zis = new ZipInputStream(inputStream)
+        ZipEntry entry
+        while ((entry = zis.getNextEntry()) != null) {
+            def name = entry.getName()
+            if (name.endsWith('.class') && !entry.isDirectory()) {
+                // Skip module-info and package-info
+                def fileName = name.substring(name.lastIndexOf('/') + 1)
+                if (fileName == 'module-info.class' || fileName == 'package-info.class') {
+                    zis.closeEntry()
+                    continue
+                }
+
+                // Convert path to package: com/example/Foo.class -> com.example
+                def lastSlash = name.lastIndexOf('/')
+                if (lastSlash > 0) {
+                    def pkg = name.substring(0, lastSlash).replace('/', '.')
+                    packages[pkg] = packages[pkg] + 1
+                    totalClasses++
+                } else {
+                    // Default package
+                    packages['(default)'] = packages['(default)'] + 1
+                    totalClasses++
+                }
+            }
+            zis.closeEntry()
+        }
+        zis.close()
+    } catch (Exception e) {
+        // Silently handle -- will show in warnings
+    }
+
+    return [packages: packages, classCount: totalClasses]
+}
+
+/**
+ * Scan a directory tree of .class files (for app / dynamic-feature modules).
+ * These modules compile to build/intermediates/javac/<variant>/classes/ or
+ * build/tmp/kotlin-classes/<variant>/ rather than a classes.jar.
+ */
+def scanClassesFromDirectory(File classDir) {
+    def packages = [:].withDefault { 0 }
+    int totalClasses = 0
+
+    if (classDir == null || !classDir.exists() || !classDir.isDirectory()) {
+        return [packages: packages, classCount: totalClasses]
+    }
+
+    classDir.eachFileRecurse { file ->
+        if (file.isDirectory() || !file.name.endsWith('.class')) return
+        // Skip module-info and package-info
+        if (file.name == 'module-info.class' || file.name == 'package-info.class') return
+
+        // Derive package from relative path: classDir/com/example/Foo.class -> com.example
+        def relativePath = classDir.toPath().relativize(file.toPath()).toString()
+        def normalized = relativePath.replace(File.separator, '/')
+        def lastSlash = normalized.lastIndexOf('/')
+        if (lastSlash > 0) {
+            def pkg = normalized.substring(0, lastSlash).replace('/', '.')
+            packages[pkg] = packages[pkg] + 1
+            totalClasses++
+        } else {
+            packages['(default)'] = packages['(default)'] + 1
+            totalClasses++
+        }
+    }
+
+    return [packages: packages, classCount: totalClasses]
+}
+
+/**
+ * Extract class info from an AAR (classes.jar + libs/*.jar inside).
+ */
+def extractClassesFromAAR(ZipFile zip) {
+    def allPackages = [:].withDefault { 0 }
+    int totalClasses = 0
+    def warnings = []
+
+    // classes.jar
+    def classesJarEntry = zip.getEntry('classes.jar')
+    if (classesJarEntry != null) {
+        def result = scanClassesFromStream(zip.getInputStream(classesJarEntry))
+        result.packages.each { pkg, count -> allPackages[pkg] = allPackages[pkg] + count }
+        totalClasses += result.classCount
+    } else {
+        warnings << 'No classes.jar found in AAR'
+    }
+
+    // Also check for additional classes (classes2.jar, classes3.jar, etc.)
+    (2..10).each { i ->
+        def extraEntry = zip.getEntry("classes${i}.jar")
+        if (extraEntry != null) {
+            def result = scanClassesFromStream(zip.getInputStream(extraEntry))
+            result.packages.each { pkg, count -> allPackages[pkg] = allPackages[pkg] + count }
+            totalClasses += result.classCount
+        }
+    }
+
+    // libs/*.jar inside AAR
+    zip.entries().each { ZipEntry entry ->
+        if (entry.getName().startsWith('libs/') && entry.getName().endsWith('.jar') && !entry.isDirectory()) {
+            def result = scanClassesFromStream(zip.getInputStream(entry))
+            result.packages.each { pkg, count -> allPackages[pkg] = allPackages[pkg] + count }
+            totalClasses += result.classCount
+        }
+    }
+
+    return [packages: allPackages, classCount: totalClasses, warnings: warnings]
+}
+
+/**
+ * Extract class info from a plain JAR file.
+ */
+def extractClassesFromJAR(File jarFile) {
+    def warnings = []
+    try {
+        def result = scanClassesFromStream(new FileInputStream(jarFile))
+        return [packages: result.packages, classCount: result.classCount, warnings: warnings]
+    } catch (Exception e) {
+        warnings << "Failed to read JAR: ${e.message}"
+        return [packages: [:], classCount: 0, warnings: warnings]
+    }
+}
+
+/**
+ * Extract class info from local module build intermediates.
+ */
+def extractClassesFromLocalModule(File projectDir, String variant) {
+    def allPackages = [:].withDefault { 0 }
+    int totalClasses = 0
+    def warnings = []
+
+    // Check AAR output first (most reliable, contains everything)
+    def aarDir = new File(projectDir, "build/outputs/aar")
+    if (aarDir.exists()) {
+        def aarFile = aarDir.listFiles()?.find { it.name.endsWith('.aar') }
+        if (aarFile != null) {
+            try {
+                def zip = new ZipFile(aarFile)
+                def aarResult = extractClassesFromAAR(zip)
+                zip.close()
+                return aarResult
+            } catch (Exception e) {
+                warnings << "Failed to read local AAR: ${e.message}"
+            }
+        }
+    }
+
+    // Intermediates base dirs to search (AGP 7.x and 8.x)
+    def baseDirs = ['compile_library_classes_jar', 'runtime_library_classes_jar', 'full_jar']
+    // Variant names to try
+    def variantNames = ([variant] + splitVariant(variant) + ['release', 'debug']).unique()
+
+    // AGP 8.x nests classes.jar under a task-name subdir:
+    //   intermediates/<baseDir>/<variant>/bundleLibCompileToJar<Variant>/classes.jar
+    // AGP 7.x has it directly:
+    //   intermediates/<baseDir>/<variant>/classes.jar
+    // Search recursively within the variant dir to handle both.
+    File classesJar = null
+    for (base in baseDirs) {
+        if (classesJar != null) break
+        for (v in variantNames) {
+            def variantDir = new File(projectDir, "build/intermediates/${base}/${v}")
+            if (!variantDir.exists()) continue
+            // Direct check (AGP 7.x)
+            def direct = new File(variantDir, "classes.jar")
+            if (direct.exists()) { classesJar = direct; break }
+            // Search one level deeper (AGP 8.x task-name subdir)
+            variantDir.listFiles()?.each { subDir ->
+                if (classesJar != null) return
+                if (subDir.isDirectory()) {
+                    def nested = new File(subDir, "classes.jar")
+                    if (nested.exists()) classesJar = nested
+                }
+            }
+            if (classesJar != null) break
+        }
+    }
+
+    if (classesJar != null) {
+        try {
+            def result = scanClassesFromStream(new FileInputStream(classesJar))
+            result.packages.each { pkg, count -> allPackages[pkg] = allPackages[pkg] + count }
+            totalClasses += result.classCount
+        } catch (Exception e) {
+            warnings << "Failed to read classes.jar: ${e.message}"
+        }
+    } else {
+        warnings << 'No classes.jar found in build intermediates (has the module been built?)'
+    }
+
+    return [packages: allPackages, classCount: totalClasses, warnings: warnings]
+}
+
+/**
+ * Extract class info from an app or dynamic-feature module.
+ * These modules don't produce classes.jar; they compile to:
+ *   build/intermediates/javac/<variant>/classes/     (Java)
+ *   build/tmp/kotlin-classes/<variant>/              (Kotlin)
+ */
+def extractClassesFromAppOrFeatureModule(File projectDir, String variant) {
+    def allPackages = [:].withDefault { 0 }
+    int totalClasses = 0
+    def warnings = []
+    boolean found = false
+
+    def variantNames = ([variant] + splitVariant(variant) + ['release', 'debug']).unique()
+
+    for (v in variantNames) {
+        // Java compiled classes
+        // AGP 7.x: build/intermediates/javac/<variant>/classes
+        // AGP 8.x: build/intermediates/javac/<variant>/compile<Variant>JavaWithJavac/classes
+        def javacBaseDir = new File(projectDir, "build/intermediates/javac/${v}")
+        File javacDir = null
+        if (javacBaseDir.exists()) {
+            // Direct path (AGP 7.x)
+            def direct = new File(javacBaseDir, "classes")
+            if (direct.exists()) {
+                javacDir = direct
+            } else {
+                // Search one level deeper for a 'classes' directory (AGP 8.x task-name subdir)
+                javacDir = javacBaseDir.listFiles()?.findResult { subDir ->
+                    if (subDir.isDirectory()) {
+                        def candidate = new File(subDir, "classes")
+                        if (candidate.exists()) return candidate
+                    }
+                    return null
+                }
+            }
+        }
+        if (javacDir != null) {
+            found = true
+            def result = scanClassesFromDirectory(javacDir)
+            result.packages.each { pkg, count -> allPackages[pkg] = allPackages[pkg] + count }
+            totalClasses += result.classCount
+        }
+
+        // Kotlin compiled classes
+        def kotlinDir = new File(projectDir, "build/tmp/kotlin-classes/${v}")
+        if (kotlinDir.exists()) {
+            found = true
+            def result = scanClassesFromDirectory(kotlinDir)
+            // Merge, avoiding double-counting if a class appears in both (shouldn't happen, but be safe)
+            result.packages.each { pkg, count ->
+                if (!allPackages.containsKey(pkg)) {
+                    allPackages[pkg] = count
+                } else {
+                    allPackages[pkg] = allPackages[pkg] + count
+                }
+            }
+            totalClasses += result.classCount
+        }
+
+        if (found) break  // stop once we find classes for a variant
+    }
+
+    if (!found) {
+        warnings << 'No compiled classes found in javac/kotlin intermediates (has the module been built?)'
+    }
+
+    // Supplement with source-file scan to catch packages not in compiled output
+    // (e.g. when the build was incremental/incomplete).
+    // For packages already found in compiled classes, keep the compiled count (more accurate).
+    // For packages ONLY in source, use source file count as an approximation.
+    def sourceDirs = []
+    def flavor = ''
+    def varMatch = (variant =~ /^([a-z][a-zA-Z_]*?)([A-Z][a-zA-Z_]*)$/)
+    if (varMatch.matches()) flavor = varMatch[0][1]
+
+    ['java', 'kotlin'].each { lang ->
+        sourceDirs << new File(projectDir, "src/main/${lang}")
+        if (flavor) sourceDirs << new File(projectDir, "src/${flavor}/${lang}")
+    }
+
+    // First pass: count source files per package
+    def sourcePackages = [:].withDefault { 0 }
+    sourceDirs.findAll { it.exists() }.each { srcDir ->
+        srcDir.eachFileRecurse(groovy.io.FileType.FILES) { f ->
+            if (!f.name.endsWith('.java') && !f.name.endsWith('.kt')) return
+            def rel = srcDir.toPath().relativize(f.parentFile.toPath()).toString()
+            if (!rel) return
+            def pkg = rel.replace(File.separator, '.')
+            sourcePackages[pkg] = sourcePackages[pkg] + 1
+        }
+    }
+
+    // Merge: only add packages not already found from compiled output
+    int sourceOnlyPackages = 0
+    int sourceOnlyClasses = 0
+    sourcePackages.each { pkg, count ->
+        if (!allPackages.containsKey(pkg)) {
+            allPackages[pkg] = count
+            totalClasses += count
+            sourceOnlyPackages++
+            sourceOnlyClasses += count
+        }
+    }
+    if (sourceOnlyPackages > 0) {
+        warnings << "Supplemented ${sourceOnlyPackages} packages (${sourceOnlyClasses} source files) not found in compiled output"
+    }
+
+    return [packages: allPackages, classCount: totalClasses, warnings: warnings]
+}
+
+// ---------------------------------------------------------------------------
+// Extractor: JNI / native library scanner
+// ---------------------------------------------------------------------------
+
+/**
+ * Scan AAR zip for jni/<abi>/*.so entries.
+ */
+def extractNativeLibsFromAAR(ZipFile zip) {
+    def libs = []
+    zip.entries().each { ZipEntry entry ->
+        def name = entry.getName()
+        if (name.startsWith('jni/') && name.endsWith('.so') && !entry.isDirectory()) {
+            def parts = name.split('/')
+            if (parts.length >= 3) {
+                libs << [
+                    abi      : parts[1],
+                    name     : parts[parts.length - 1],
+                    sizeBytes: entry.getSize()
+                ]
+            }
+        }
+    }
+    return libs
+}
+
+/**
+ * Scan local module intermediates for native libs.
+ */
+def extractNativeLibsFromLocalModule(File projectDir, String variant) {
+    def libs = []
+
+    def possiblePaths = [
+        new File(projectDir, "build/intermediates/library_jni/${variant}/jni"),
+        new File(projectDir, "build/intermediates/merged_jni_libs/${variant}/out"),
+        new File(projectDir, "src/main/jniLibs"),
+    ]
+
+    def variantParts = splitVariant(variant)
+    variantParts.each { v ->
+        possiblePaths << new File(projectDir, "build/intermediates/library_jni/${v}/jni")
+        possiblePaths << new File(projectDir, "build/intermediates/merged_jni_libs/${v}/out")
+    }
+
+    File jniDir = possiblePaths.find { it.exists() && it.isDirectory() }
+    if (jniDir != null) {
+        jniDir.eachDir { abiDir ->
+            abiDir.eachFile { soFile ->
+                if (soFile.name.endsWith('.so')) {
+                    libs << [
+                        abi      : abiDir.name,
+                        name     : soFile.name,
+                        sizeBytes: soFile.length()
+                    ]
+                }
+            }
+        }
+    }
+
+    // Also check AAR output
+    if (libs.isEmpty()) {
+        def aarDir = new File(projectDir, "build/outputs/aar")
+        if (aarDir.exists()) {
+            def aarFile = aarDir.listFiles()?.find { it.name.endsWith('.aar') }
+            if (aarFile != null) {
+                try {
+                    def zip = new ZipFile(aarFile)
+                    libs = extractNativeLibsFromAAR(zip)
+                    zip.close()
+                } catch (Exception ignored) {}
+            }
+        }
+    }
+
+    return libs
+}
+
+// ---------------------------------------------------------------------------
+// Utility: split camelCase variant into possible subpaths
+// e.g. "standardRelease" -> ["standardRelease", "standard/release"]
+// ---------------------------------------------------------------------------
+def splitVariant(String variant) {
+    def results = [variant]
+    // Try splitting on camelCase boundary (flavor + buildType)
+    def match = (variant =~ /^([a-z][a-zA-Z_]*?)([A-Z][a-zA-Z_]*)$/)
+    if (match.matches()) {
+        def flavor = match[0][1]
+        def buildType = match[0][2].uncapitalize()
+        results << "${flavor}/${buildType}"
+        results << "${flavor}${buildType.capitalize()}"
+        // Also try flavor + opposite build type (e.g. standardRelease -> standardDebug)
+        // so we can find intermediates from whichever variant was actually built
+        if (buildType == 'release') {
+            results << "${flavor}Debug"
+            results << "${flavor}/debug"
+        } else if (buildType == 'debug') {
+            results << "${flavor}Release"
+            results << "${flavor}/release"
+        }
+    }
+    return results.unique()
+}
+
+// ---------------------------------------------------------------------------
+// Helper: process a local module by scanning its disk (AAR output / intermediates / src)
+// ---------------------------------------------------------------------------
+def processLocalModuleFromDisk(Map moduleData, File projectDir, config) {
+    // Try AAR output first
+    def aarDir = new File(projectDir, "build/outputs/aar")
+    File aarFile = aarDir.exists() ? aarDir.listFiles()?.find { it.name.endsWith('.aar') } : null
+
+    if (aarFile != null) {
+        def zip = new ZipFile(aarFile)
+
+        def resResult = extractResources(zip)
+        moduleData.resources = [
+            declared        : resResult.declared,
+            totalRTxtEntries: resResult.totalRTxtEntries,
+            transitive      : resResult.transitive
+        ]
+        moduleData.warnings.addAll(resResult.warnings)
+
+        def classResult = extractClassesFromAAR(zip)
+        moduleData.packages = classResult.packages
+        moduleData.classCount = classResult.classCount
+        moduleData.warnings.addAll(classResult.warnings)
+
+        moduleData.nativeLibs = extractNativeLibsFromAAR(zip)
+        zip.close()
+    } else {
+        // Fall back to intermediates / source
+        def resResult = extractResourcesFromLocalModule(projectDir, config.variant)
+        moduleData.resources = [
+            declared        : resResult.declared,
+            totalRTxtEntries: resResult.totalRTxtEntries,
+            transitive      : resResult.transitive
+        ]
+        moduleData.warnings.addAll(resResult.warnings)
+
+        def classResult = extractClassesFromLocalModule(projectDir, config.variant)
+        moduleData.packages = classResult.packages
+        moduleData.classCount = classResult.classCount
+        moduleData.warnings.addAll(classResult.warnings)
+
+        moduleData.nativeLibs = extractNativeLibsFromLocalModule(projectDir, config.variant)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Helper: process an app or dynamic-feature module (no AAR output, loose .class files)
+// ---------------------------------------------------------------------------
+def processAppOrFeatureModule(Map moduleData, File projectDir, config) {
+    // Resources: same approach as local library modules (scan src/main/res, intermediates R.txt, etc.)
+    def resResult = extractResourcesFromLocalModule(projectDir, config.variant)
+    moduleData.resources = [
+        declared        : resResult.declared,
+        totalRTxtEntries: resResult.totalRTxtEntries,
+        transitive      : resResult.transitive
+    ]
+    moduleData.warnings.addAll(resResult.warnings)
+
+    // Classes: app/dynamic-feature modules compile to directories, not classes.jar
+    def classResult = extractClassesFromAppOrFeatureModule(projectDir, config.variant)
+    moduleData.packages = classResult.packages
+    moduleData.classCount = classResult.classCount
+    moduleData.warnings.addAll(classResult.warnings)
+
+    // Native libs
+    moduleData.nativeLibs = extractNativeLibsFromLocalModule(projectDir, config.variant)
+}
+
+// ---------------------------------------------------------------------------
+// Main: register extension on root project, then wire task on app modules
+// ---------------------------------------------------------------------------
+
+// Register extension on root so it can be configured in root build.gradle
+if (!rootProject.extensions.findByName('moduleSizeAnalysis')) {
+    rootProject.extensions.create('moduleSizeAnalysis', ModuleSizeAnalysisExtension)
+    rootProject.moduleSizeAnalysis.outputFile = rootProject.file("${rootProject.buildDir}/reports/module-size-analysis.json")
+    rootProject.moduleSizeAnalysis.resourceMappingFile = rootProject.file("${rootProject.buildDir}/reports/resource-mapping.json")
+    rootProject.moduleSizeAnalysis.metadataFile = rootProject.file("${rootProject.buildDir}/reports/module-metadata.json")
+    rootProject.moduleSizeAnalysis.packageMappingFile = rootProject.file("${rootProject.buildDir}/reports/package-mapping.json")
+}
+
+rootProject.allprojects { proj ->
+    proj.afterEvaluate {
+        // Only attach to android application modules
+        if (!proj.plugins.hasPlugin('com.android.application')) return
+
+        proj.tasks.register('analyzeModuleSizes') {
+            group = 'analysis'
+            description = 'Analyzes dependencies: module sizes + resource file mapping'
+
+            doLast {
+                // Read config from root extension (where it's defined centrally)
+                def config = rootProject.moduleSizeAnalysis
+                // Default outputs to app module's build dir if not overridden
+                if (config.outputFile == rootProject.file("${rootProject.buildDir}/reports/module-size-analysis.json")) {
+                    config.outputFile = proj.file("${proj.buildDir}/reports/module-size-analysis.json")
+                }
+                if (config.resourceMappingFile == rootProject.file("${rootProject.buildDir}/reports/resource-mapping.json")) {
+                    config.resourceMappingFile = proj.file("${proj.buildDir}/reports/resource-mapping.json")
+                }
+                if (config.metadataFile == rootProject.file("${rootProject.buildDir}/reports/module-metadata.json")) {
+                    config.metadataFile = proj.file("${proj.buildDir}/reports/module-metadata.json")
+                }
+                if (config.packageMappingFile == rootProject.file("${rootProject.buildDir}/reports/package-mapping.json")) {
+                    config.packageMappingFile = proj.file("${proj.buildDir}/reports/package-mapping.json")
+                }
+
+                // Allow property-based overrides
+                if (proj.findProperty('moduleSizeAnalysis.variant')) {
+                    config.variant = proj.findProperty('moduleSizeAnalysis.variant')
+                }
+                if (proj.findProperty('moduleSizeAnalysis.packageDepth')) {
+                    config.packageDepth = proj.findProperty('moduleSizeAnalysis.packageDepth') as int
+                }
+                if (proj.findProperty('moduleSizeAnalysis.includePatterns')) {
+                    config.includePatterns = proj.findProperty('moduleSizeAnalysis.includePatterns').toString().split(',').collect { it.trim() }
+                }
+                if (proj.findProperty('moduleSizeAnalysis.excludePatterns')) {
+                    config.excludePatterns = proj.findProperty('moduleSizeAnalysis.excludePatterns').toString().split(',').collect { it.trim() }
+                }
+                if (proj.findProperty('moduleSizeAnalysis.outputFile')) {
+                    config.outputFile = proj.file(proj.findProperty('moduleSizeAnalysis.outputFile'))
+                }
+                if (proj.findProperty('moduleSizeAnalysis.includeLocalModules') != null) {
+                    config.includeLocalModules = proj.findProperty('moduleSizeAnalysis.includeLocalModules').toString().toBoolean()
+                }
+                if (proj.findProperty('moduleSizeAnalysis.enableModuleAnalysis') != null) {
+                    config.enableModuleAnalysis = proj.findProperty('moduleSizeAnalysis.enableModuleAnalysis').toString().toBoolean()
+                }
+                if (proj.findProperty('moduleSizeAnalysis.enableResourceMapping') != null) {
+                    config.enableResourceMapping = proj.findProperty('moduleSizeAnalysis.enableResourceMapping').toString().toBoolean()
+                }
+
+                logger.lifecycle("=== Module Size Analysis ===")
+                logger.lifecycle("  Variant           : ${config.variant}")
+                logger.lifecycle("  Package Depth     : ${config.packageDepth}")
+                logger.lifecycle("  Include           : ${config.includePatterns}")
+                logger.lifecycle("  Exclude           : ${config.excludePatterns}")
+                logger.lifecycle("  Local Modules     : ${config.includeLocalModules}")
+                logger.lifecycle("  Module Analysis   : ${config.enableModuleAnalysis}")
+                logger.lifecycle("  Resource Mapping  : ${config.enableResourceMapping}")
+                logger.lifecycle("  FU Mapping        : ${config.functionalUnitMapping.size()} units defined")
+                logger.lifecycle("")
+
+                // Shared state across both steps for the combined metadata file
+                def allModuleIds = new TreeSet<String>()
+                def moduleAnalysisData = null  // populated by step 1
+                def resourceMappingRawData = null  // populated by step 2
+
+                // Detect dynamic feature modules (needed by both metadata and step 2)
+                def dynamicFeatures = [] as Set<String>
+                def dynamicFeatureDeps = [:] // featureName -> Set<moduleId>
+                try {
+                    def androidExt = proj.extensions.findByName('android')
+                    if (androidExt != null && androidExt.hasProperty('dynamicFeatures')) {
+                        dynamicFeatures = androidExt.dynamicFeatures.collect { it.toString() }.toSet()
+                    }
+                } catch (Exception e) {
+                    logger.warn("  Could not read dynamicFeatures: ${e.message}")
+                }
+                if (dynamicFeatures) logger.lifecycle("  Dynamic features  : ${dynamicFeatures}")
+
+                // ----------------------------------------------------------
+                // 1. Find the right configuration for the variant
+                // ----------------------------------------------------------
+                def configName = "${config.variant}RuntimeClasspath"
+                def resolvedConfig = proj.configurations.findByName(configName)
+                if (resolvedConfig == null) {
+                    // Try common alternatives
+                    def alternatives = [
+                        "${config.variant}CompileClasspath",
+                        "releaseRuntimeClasspath",
+                        "debugRuntimeClasspath",
+                    ]
+                    for (alt in alternatives) {
+                        resolvedConfig = proj.configurations.findByName(alt)
+                        if (resolvedConfig != null) {
+                            logger.lifecycle("  Configuration '${configName}' not found, using '${alt}'")
+                            break
+                        }
+                    }
+                }
+                if (resolvedConfig == null) {
+                    throw new GradleException(
+                        "Could not find configuration '${configName}'. " +
+                        "Available: ${proj.configurations.collect { it.name }.sort().join(', ')}"
+                    )
+                }
+
+                // ----------------------------------------------------------
+                // 2. Resolve artifacts using incoming.artifactView with lenient=true
+                //    This is the ONLY way to survive variant-ambiguity errors
+                //    in AGP 8.x / Gradle 8.13 with multi-flavor projects.
+                // ----------------------------------------------------------
+                def artifactView = resolvedConfig.incoming.artifactView { viewConfig ->
+                    viewConfig.lenient = true
+                }
+                def resolvedArtifacts = artifactView.artifacts
+
+                // Collect which project paths were successfully resolved
+                def resolvedProjectPaths = new HashSet<String>()
+
+                logger.lifecycle("  Resolved artifacts : ${resolvedArtifacts.size()} (may include duplicates from transforms)")
+                logger.lifecycle("")
+
+                def modules = [:]
+                int skipped = 0
+                int duplicates = 0
+
+                // --- Process resolved artifacts (remote AARs/JARs + some local) ---
+                resolvedArtifacts.each { artifact ->
+                    def componentId = artifact.id.componentIdentifier
+                    def isLocal = componentId instanceof ProjectComponentIdentifier
+                    def moduleId
+                    def moduleType
+                    File artifactFile = artifact.file
+
+                    if (isLocal) {
+                        moduleId = componentId.projectPath
+                        moduleType = 'local_module'
+                        resolvedProjectPaths.add(componentId.projectPath)
+                        if (!config.includeLocalModules) {
+                            skipped++
+                            return // skip local modules when flag is off
+                        }
+                    } else {
+                        try {
+                            moduleId = "${componentId.group}:${componentId.module}:${componentId.version}"
+                        } catch (Exception e) {
+                            // Some artifact results may not be ModuleComponentIdentifier
+                            moduleId = componentId.displayName ?: componentId.toString()
+                        }
+                        moduleType = artifactFile.name.endsWith('.aar') ? 'remote_aar' : 'remote_jar'
+                    }
+
+                    // Skip duplicates (lenient view returns multiple artifact types per module)
+                    if (modules.containsKey(moduleId)) {
+                        duplicates++
+                        return // continue -- already processed this module
+                    }
+
+                    // includePatterns filtering removed — all modules are now analyzed
+                    // for complete package-mapping and resource-mapping attribution.
+                    // FU auto-assignment (android_platform / thirdparty) handles categorization.
+
+                    logger.lifecycle("  Analyzing: ${moduleId} (${moduleType})")
+
+                    def moduleData = [
+                        type       : moduleType,
+                        file       : artifactFile.absolutePath,
+                        resources  : [declared: [total: 0, byType: [:]], totalRTxtEntries: 0, transitive: 0],
+                        packages   : [:],
+                        classCount : 0,
+                        nativeLibs : [],
+                        warnings   : []
+                    ]
+
+                    try {
+                        if (moduleType == 'remote_aar') {
+                            def zip = new ZipFile(artifactFile)
+
+                            def resResult = extractResources(zip)
+                            moduleData.resources = [
+                                declared        : resResult.declared,
+                                totalRTxtEntries: resResult.totalRTxtEntries,
+                                transitive      : resResult.transitive
+                            ]
+                            moduleData.warnings.addAll(resResult.warnings)
+
+                            def classResult = extractClassesFromAAR(zip)
+                            moduleData.packages = classResult.packages
+                            moduleData.classCount = classResult.classCount
+                            moduleData.warnings.addAll(classResult.warnings)
+
+                            moduleData.nativeLibs = extractNativeLibsFromAAR(zip)
+                            zip.close()
+
+                        } else if (moduleType == 'remote_jar') {
+                            def classResult = extractClassesFromJAR(artifactFile)
+                            moduleData.packages = classResult.packages
+                            moduleData.classCount = classResult.classCount
+                            moduleData.warnings.addAll(classResult.warnings)
+
+                        } else if (moduleType == 'local_module') {
+                            def localProject = rootProject.findProject(componentId.projectPath)
+                            if (localProject != null) {
+                                def projectDir = localProject.projectDir
+
+                                if (artifactFile.name.endsWith('.aar') && artifactFile.exists()) {
+                                    def zip = new ZipFile(artifactFile)
+
+                                    def resResult = extractResources(zip)
+                                    moduleData.resources = [
+                                        declared        : resResult.declared,
+                                        totalRTxtEntries: resResult.totalRTxtEntries,
+                                        transitive      : resResult.transitive
+                                    ]
+                                    moduleData.warnings.addAll(resResult.warnings)
+
+                                    def classResult = extractClassesFromAAR(zip)
+                                    moduleData.packages = classResult.packages
+                                    moduleData.classCount = classResult.classCount
+                                    moduleData.warnings.addAll(classResult.warnings)
+
+                                    moduleData.nativeLibs = extractNativeLibsFromAAR(zip)
+                                    zip.close()
+                                } else {
+                                    processLocalModuleFromDisk(moduleData, projectDir, config)
+                                }
+
+                                moduleData.file = projectDir.absolutePath
+                            } else {
+                                moduleData.warnings << "Could not find project for ${componentId.projectPath}"
+                            }
+                        }
+                    } catch (Exception e) {
+                        moduleData.warnings << "Error processing: ${e.message}"
+                        logger.warn("    WARNING: ${e.message}")
+                    }
+
+                    modules[moduleId] = moduleData
+                }
+
+                // --- Find local project deps that failed variant resolution ---
+                //     Walk allDependencies to find ProjectDependency instances
+                //     that weren't in the resolved set, then scan them directly.
+                resolvedConfig.allDependencies.each { dep ->
+                    if (dep instanceof org.gradle.api.artifacts.ProjectDependency) {
+                        def depProjectPath = dep.dependencyProject.path
+                        if (resolvedProjectPaths.contains(depProjectPath)) return
+                        if (modules.containsKey(depProjectPath)) return
+
+                        if (!config.includeLocalModules) {
+                            skipped++
+                            return
+                        }
+
+                        // Local modules bypass include/exclude patterns (controlled by includeLocalModules flag)
+
+                        def localProject = dep.dependencyProject
+                        logger.lifecycle("  Analyzing (variant fallback): ${depProjectPath}")
+
+                        def moduleData = [
+                            type       : 'local_module',
+                            file       : localProject.projectDir.absolutePath,
+                            resources  : [declared: [total: 0, byType: [:]], totalRTxtEntries: 0, transitive: 0],
+                            packages   : [:],
+                            classCount : 0,
+                            nativeLibs : [],
+                            warnings   : ['Variant resolution failed (flavor mismatch); scanned from source/intermediates directly']
+                        ]
+
+                        try {
+                            processLocalModuleFromDisk(moduleData, localProject.projectDir, config)
+                        } catch (Exception e) {
+                            moduleData.warnings << "Error: ${e.message}"
+                            logger.warn("    WARNING: ${e.message}")
+                        }
+
+                        modules[depProjectPath] = moduleData
+                    }
+                }
+
+                // --- Process the app module itself (it is not in its own classpath) ---
+                def appModuleId = proj.path
+                if (!modules.containsKey(appModuleId)) {
+                    logger.lifecycle("  Analyzing (app module): ${appModuleId}")
+                    def moduleData = [
+                        type       : 'app_module',
+                        file       : proj.projectDir.absolutePath,
+                        resources  : [declared: [total: 0, byType: [:]], totalRTxtEntries: 0, transitive: 0],
+                        packages   : [:],
+                        classCount : 0,
+                        nativeLibs : [],
+                        warnings   : []
+                    ]
+                    try {
+                        processAppOrFeatureModule(moduleData, proj.projectDir, config)
+                    } catch (Exception e) {
+                        moduleData.warnings << "Error processing app module: ${e.message}"
+                        logger.warn("    WARNING: ${e.message}")
+                    }
+                    modules[appModuleId] = moduleData
+                }
+
+                // --- Process dynamic feature modules (they depend on the app, not vice versa) ---
+                if (config.includeLocalModules) {
+                    dynamicFeatures.each { featurePath ->
+                        if (modules.containsKey(featurePath)) return
+                        def featureProject = rootProject.findProject(featurePath)
+                        if (featureProject == null) return
+
+                        logger.lifecycle("  Analyzing (dynamic feature): ${featurePath}")
+                        def moduleData = [
+                            type       : 'dynamic_feature',
+                            file       : featureProject.projectDir.absolutePath,
+                            resources  : [declared: [total: 0, byType: [:]], totalRTxtEntries: 0, transitive: 0],
+                            packages   : [:],
+                            classCount : 0,
+                            nativeLibs : [],
+                            warnings   : []
+                        ]
+                        try {
+                            processAppOrFeatureModule(moduleData, featureProject.projectDir, config)
+                        } catch (Exception e) {
+                            moduleData.warnings << "Error: ${e.message}"
+                            logger.warn("    WARNING: ${e.message}")
+                        }
+                        modules[featurePath] = moduleData
+                    }
+                }
+
+                // ==========================================================
+                // STEP 1: Module Analysis (resources, classes, native libs)
+                // ==========================================================
+                if (config.enableModuleAnalysis) {
+                    logger.lifecycle("")
+                    logger.lifecycle("  Analyzed   : ${modules.size()} modules")
+                    logger.lifecycle("  Duplicates : ${duplicates} (same module, different artifact type -- skipped)")
+                    logger.lifecycle("  Filtered   : ${skipped} (excluded by patterns)")
+
+                    int totalDeclaredRes = 0
+                    int totalClasses = 0
+                    int totalNativeLibs = 0
+                    long totalNativeSize = 0
+
+                    modules.each { id, data ->
+                        totalDeclaredRes += (data.resources?.declared?.total ?: 0)
+                        totalClasses += (data.classCount ?: 0)
+                        totalNativeLibs += (data.nativeLibs?.size() ?: 0)
+                        data.nativeLibs?.each { lib -> totalNativeSize += (lib.sizeBytes ?: 0) }
+                    }
+
+                    def topByResources = modules.collect { id, data ->
+                        [module: id, count: data.resources?.declared?.total ?: 0]
+                    }.sort { -it.count }.take(20).findAll { it.count > 0 }
+
+                    def topByClasses = modules.collect { id, data ->
+                        [module: id, count: data.classCount ?: 0]
+                    }.sort { -it.count }.take(20).findAll { it.count > 0 }
+
+                    def topByNativeSize = modules.collect { id, data ->
+                        def totalSize = (data.nativeLibs?.collect { it.sizeBytes ?: 0 }?.sum() ?: 0) as long
+                        [module: id, sizeBytes: totalSize]
+                    }.sort { -it.sizeBytes }.take(20).findAll { it.sizeBytes > 0 }
+
+                    def topByTransitive = modules.collect { id, data ->
+                        [module: id, count: data.resources?.transitive ?: 0]
+                    }.sort { -it.count }.take(20).findAll { it.count > 0 }
+
+                    def moduleSummary = [
+                        totalModules          : modules.size(),
+                        totalDeclaredResources: totalDeclaredRes,
+                        totalClasses          : totalClasses,
+                        totalNativeLibs       : totalNativeLibs,
+                        totalNativeSizeBytes  : totalNativeSize,
+                        topByDeclaredResources: topByResources,
+                        topByClasses          : topByClasses,
+                        topByNativeSize       : topByNativeSize,
+                        topByTransitiveRes    : topByTransitive,
+                    ]
+
+                    // Save for deferred writing (after FU mapping is built)
+                    allModuleIds.addAll(modules.keySet())
+                    moduleAnalysisData = [modules: modules, summary: moduleSummary]
+
+                    logger.lifecycle("")
+                    logger.lifecycle("=== Module Analysis Summary ===")
+                    logger.lifecycle("  Modules analyzed     : ${modules.size()}")
+                    logger.lifecycle("  Declared resources   : ${totalDeclaredRes}")
+                    logger.lifecycle("  Total classes        : ${totalClasses}")
+                    logger.lifecycle("  Native libraries     : ${totalNativeLibs}")
+                    logger.lifecycle("  Native size (bytes)  : ${totalNativeSize}")
+                    logger.lifecycle("================================")
+                } else {
+                    logger.lifecycle("  Module analysis SKIPPED (enableModuleAnalysis=false)")
+                }
+
+                // ==========================================================
+                // STEP 2: Resource Mapping (filePath -> module)
+                // ==========================================================
+                if (config.enableResourceMapping) {
+                    logger.lifecycle("")
+                    logger.lifecycle("--- Resource Mapping ---")
+
+                    // Resolve each dynamic feature's deps
+                    dynamicFeatures.each { featurePath ->
+                        def featureProject = rootProject.findProject(featurePath)
+                        if (featureProject == null) return
+
+                        def featureName = featureProject.name
+                        def featureDepIds = new HashSet<String>()
+
+                        def featureConfigName = "${config.variant}RuntimeClasspath"
+                        def featureRConfig = featureProject.configurations.findByName(featureConfigName)
+                            ?: featureProject.configurations.findByName("releaseRuntimeClasspath")
+
+                        if (featureRConfig != null) {
+                            try {
+                                featureRConfig.incoming.artifactView { vc -> vc.lenient = true }.artifacts.each { art ->
+                                    def cid = art.id.componentIdentifier
+                                    if (cid instanceof ProjectComponentIdentifier) {
+                                        if (cid.projectPath != proj.path) featureDepIds.add(cid.projectPath)
+                                    } else {
+                                        try { featureDepIds.add("${cid.group}:${cid.module}:${cid.version}") } catch (Exception ignored) {}
+                                    }
+                                }
+                            } catch (Exception e) {
+                                logger.warn("  Could not resolve deps for feature ${featurePath}: ${e.message}")
+                            }
+                            featureRConfig.allDependencies.each { dep ->
+                                if (dep instanceof org.gradle.api.artifacts.ProjectDependency) {
+                                    def depPath = dep.dependencyProject.path
+                                    if (depPath != proj.path) featureDepIds.add(depPath)
+                                }
+                            }
+                        }
+                        dynamicFeatureDeps[featureName] = featureDepIds
+                        logger.lifecycle("  Feature '${featureName}': ${featureDepIds.size()} deps")
+                    }
+
+                    // Collect base module's dep IDs (reuse resolvedConfig from above)
+                    def baseDepIds = new HashSet<String>()
+                    if (resolvedConfig != null) {
+                        try {
+                            resolvedConfig.incoming.artifactView { vc -> vc.lenient = true }.artifacts.each { art ->
+                                def cid = art.id.componentIdentifier
+                                if (cid instanceof ProjectComponentIdentifier) {
+                                    baseDepIds.add(cid.projectPath)
+                                } else {
+                                    try { baseDepIds.add("${cid.group}:${cid.module}:${cid.version}") } catch (Exception ignored) {}
+                                }
+                            }
+                        } catch (Exception ignored) {}
+                        resolvedConfig.allDependencies.each { dep ->
+                            if (dep instanceof org.gradle.api.artifacts.ProjectDependency) {
+                                baseDepIds.add(dep.dependencyProject.path)
+                            }
+                        }
+                    }
+
+                    // Determine APK split for a module
+                    def getApkSplit = { String modId ->
+                        for (entry in dynamicFeatureDeps) {
+                            if (entry.value.contains(modId) && !baseDepIds.contains(modId)) return entry.key
+                        }
+                        for (fp in dynamicFeatures) {
+                            def fp2 = rootProject.findProject(fp)
+                            if (fp2 != null && (fp2.path == modId || fp2.name == modId)) return fp2.name
+                        }
+                        return 'base'
+                    }
+
+                    // Scan resources — values are lists to track collisions
+                    def resourceMapping = [:]  // filePath -> List<moduleId>
+                    int totalMapped = 0
+
+                    def addMapping = { String filePath, String modId ->
+                        def existing = resourceMapping[filePath]
+                        if (existing == null) {
+                            resourceMapping[filePath] = [modId]
+                            totalMapped++
+                        } else if (!existing.contains(modId)) {
+                            existing.add(modId)
+                        }
+                    }
+
+                    def mapResArtifact = { String modId, File artFile, String apkSplit ->
+                        if (artFile == null || !artFile.exists()) return
+                        if (artFile.name.endsWith('.aar')) {
+                            try {
+                                def zip = new ZipFile(artFile)
+                                scanFilePathsFromZip(zip).each { resPath ->
+                                    addMapping("${apkSplit}/${resPath}", modId)
+                                }
+                                zip.close()
+                            } catch (Exception e) { logger.warn("    Could not scan ${modId}: ${e.message}") }
+                        }
+                    }
+
+                    // Process base config artifacts
+                    if (resolvedConfig != null) {
+                        def processedRes = new HashSet<String>()
+
+                        resolvedConfig.incoming.artifactView { vc -> vc.lenient = true }.artifacts.each { artifact ->
+                            def componentId = artifact.id.componentIdentifier
+                            def isLocal = componentId instanceof ProjectComponentIdentifier
+                            def modId
+
+                            if (isLocal) {
+                                modId = componentId.projectPath
+                                if (!config.includeLocalModules) return
+                            } else {
+                                try { modId = "${componentId.group}:${componentId.module}:${componentId.version}" }
+                                catch (Exception e) { modId = componentId.displayName ?: componentId.toString() }
+                                // No includePatterns filtering here — resource mapping includes ALL
+                                // modules for complete file-level attribution. Step 1 (module analysis)
+                                // still respects includePatterns for focused detail.
+                            }
+                            if (processedRes.contains(modId)) return
+                            processedRes.add(modId)
+                            mapResArtifact(modId, artifact.file, getApkSplit(modId))
+                        }
+
+                        // Variant fallback for local modules
+                        resolvedConfig.allDependencies.each { dep ->
+                            if (dep instanceof org.gradle.api.artifacts.ProjectDependency) {
+                                def depPath = dep.dependencyProject.path
+                                if (processedRes.contains(depPath)) return
+                                if (!config.includeLocalModules) return
+                                processedRes.add(depPath)
+
+                                def pDir = dep.dependencyProject.projectDir
+                                def apkSplit = getApkSplit(depPath)
+
+                                def aarDir = new File(pDir, "build/outputs/aar")
+                                File aarFile = aarDir.exists() ? aarDir.listFiles()?.find { it.name.endsWith('.aar') } : null
+                                if (aarFile != null) {
+                                    mapResArtifact(depPath, aarFile, apkSplit)
+                                } else {
+                                    scanFilePathsFromLocalModule(pDir, dep.dependencyProject).each { resPath ->
+                                        addMapping("${apkSplit}/${resPath}", depPath)
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // Process the app module's own resources (mapped as base/)
+                    def appResFiles = scanFilePathsFromLocalModule(proj.projectDir, proj)
+                    appResFiles.each { resPath ->
+                        addMapping("base/${resPath}", proj.path)
+                    }
+                    logger.lifecycle("  App module (${proj.path}): ${appResFiles.size()} own files -> base/")
+
+                    // Process dynamic feature modules' own resources + exclusive deps
+                    dynamicFeatures.each { featurePath ->
+                        def featureProject = rootProject.findProject(featurePath)
+                        if (featureProject == null) return
+                        def featureName = featureProject.name
+                        int featureFileCount = 0
+
+                        // Feature's own res/
+                        def featureOwnFiles = scanFilePathsFromLocalModule(featureProject.projectDir, featureProject)
+                        featureOwnFiles.each { resPath ->
+                            addMapping("${featureName}/${resPath}", featurePath)
+                        }
+                        featureFileCount += featureOwnFiles.size()
+
+                        // Feature's AAR output
+                        def aarDir = new File(featureProject.projectDir, "build/outputs/aar")
+                        File aarFile = aarDir.exists() ? aarDir.listFiles()?.find { it.name.endsWith('.aar') } : null
+                        if (aarFile != null) {
+                            try {
+                                def zip = new ZipFile(aarFile)
+                                def aarFiles = scanFilePathsFromZip(zip)
+                                aarFiles.each { resPath ->
+                                    addMapping("${featureName}/${resPath}", featurePath)
+                                }
+                                featureFileCount += aarFiles.size()
+                                zip.close()
+                            } catch (Exception ignored) {}
+                        }
+
+                        // Feature-exclusive dependency resources
+                        def fConfig = featureProject.configurations.findByName("${config.variant}RuntimeClasspath")
+                            ?: featureProject.configurations.findByName("releaseRuntimeClasspath")
+                        if (fConfig != null) {
+                            try {
+                                def processedFDeps = new HashSet<String>()
+                                fConfig.incoming.artifactView { vc -> vc.lenient = true }.artifacts.each { art ->
+                                    def cid = art.id.componentIdentifier
+                                    def mId
+                                    if (cid instanceof ProjectComponentIdentifier) {
+                                        mId = cid.projectPath
+                                        if (mId == proj.path) return
+                                    } else {
+                                        try { mId = "${cid.group}:${cid.module}:${cid.version}" } catch (Exception e) { return }
+                                    }
+                                    if (processedFDeps.contains(mId)) return
+                                    processedFDeps.add(mId)
+                                    if (!baseDepIds.contains(mId)) mapResArtifact(mId, art.file, featureName)
+                                }
+                            } catch (Exception e) {
+                                logger.warn("  Could not scan feature ${featureName} deps: ${e.message}")
+                            }
+                        }
+
+                        if (featureFileCount == 0) {
+                            logger.lifecycle("  Feature '${featureName}': no resource/asset/jni files (code-only module)")
+                        } else {
+                            logger.lifecycle("  Feature '${featureName}': ${featureFileCount} files -> ${featureName}/")
+                        }
+                    }
+
+                    // Save for deferred writing (after FU mapping is built)
+                    resourceMapping.values().each { modList -> allModuleIds.addAll(modList) }
+                    def collisions = resourceMapping.count { k, v -> v.size() > 1 }
+                    resourceMappingRawData = [
+                        resourceMapping: resourceMapping,
+                        totalMapped    : totalMapped,
+                    ]
+
+                    logger.lifecycle("")
+                    logger.lifecycle("=== Resource Mapping Summary ===")
+                    logger.lifecycle("  Total mapped files : ${totalMapped}")
+                    logger.lifecycle("  Collisions         : ${collisions}")
+                    logger.lifecycle("  Unique modules     : ${resourceMapping.values().flatten().toSet().size()}")
+                    resourceMapping.keySet().groupBy { it.split('/')[0] }.collectEntries { k, v -> [k, v.size()] }.each { split, count ->
+                        logger.lifecycle("  ${split.padRight(20)}: ${count} files")
+                    }
+                    logger.lifecycle("=================================")
+                } else {
+                    logger.lifecycle("  Resource mapping SKIPPED (enableResourceMapping=false)")
+                }
+
+                // ==========================================================
+                // STEP 3: Write metadata file + both report files
+                // ==========================================================
+                def allModules = allModuleIds.toList() // TreeSet is already sorted
+                def moduleIndexMap = [:]
+                allModules.eachWithIndex { mod, idx -> moduleIndexMap[mod] = idx }
+
+                // Build functional unit mapping (FU name -> list of module indices)
+                def fuMapping = new LinkedHashMap()
+                def mappedModuleIndices = new HashSet<Integer>()
+
+                config.functionalUnitMapping.each { fuName, patterns ->
+                    def matchingIndices = []
+                    allModules.eachWithIndex { modId, idx ->
+                        def normalizedId = modId.replace(':', '.')
+                        if (patterns.any { pattern -> globMatches(pattern.replace(':', '.'), normalizedId) }) {
+                            matchingIndices.add(idx)
+                        }
+                    }
+                    if (matchingIndices) {
+                        fuMapping[fuName] = matchingIndices
+                        mappedModuleIndices.addAll(matchingIndices)
+                    }
+                }
+
+                // Auto-assign unmapped modules to built-in FU categories.
+                // "android_platform" = Android/Google SDKs (androidx, com.google, etc.)
+                // "thirdparty"       = everything else not matched by any FU pattern
+                def androidPlatformPrefixes = ['androidx.', 'com.google.', 'com.android.', 'android.arch.']
+                def androidPlatformIndices = []
+                def thirdpartyIndices = []
+
+                (0..<allModules.size()).each { idx ->
+                    if (mappedModuleIndices.contains(idx)) return
+                    def modId = allModules[idx]
+                    // Check if it's an Android/Google platform module by group ID prefix
+                    def normalized = modId.replace(':', '.')
+                    if (androidPlatformPrefixes.any { prefix -> normalized.startsWith(prefix) }) {
+                        androidPlatformIndices.add(idx)
+                    } else {
+                        thirdpartyIndices.add(idx)
+                    }
+                }
+                if (androidPlatformIndices) fuMapping["android_platform"] = androidPlatformIndices
+                if (thirdpartyIndices) fuMapping["thirdparty"] = thirdpartyIndices
+
+                // --- Write metadata file ---
+                def metadataReport = [
+                    generatedAt        : new Date().format("yyyy-MM-dd'T'HH:mm:ss'Z'"),
+                    variant            : config.variant,
+                    packageDepth       : config.packageDepth,
+                    projectName        : rootProject.name,
+                    appModule          : proj.path,
+                    dynamicFeatures    : dynamicFeatures.collect { rootProject.findProject(it)?.name ?: it },
+                    modules            : allModules,
+                    functionalUnits    : fuMapping,
+                ]
+                // resourceFUOverrides are resolved and written to resource-mapping.json (fuOverrides section)
+                config.metadataFile.parentFile.mkdirs()
+                def metaJson = JsonOutput.prettyPrint(JsonOutput.toJson(metadataReport))
+                metaJson = metaJson.replaceAll(/\[\s*\n\s*([\d,\s]+?)\s*\n\s*\]/) { all, inner ->
+                    "[${inner.replaceAll(/\s+/, '')}]"
+                }
+                config.metadataFile.text = metaJson
+
+                def autoFuNames = ['android_platform', 'thirdparty'] as Set
+                logger.lifecycle("")
+                logger.lifecycle("=== Metadata ===")
+                logger.lifecycle("  Total modules      : ${allModules.size()}")
+                logger.lifecycle("  Functional units   : ${fuMapping.size() - fuMapping.keySet().count { autoFuNames.contains(it) }} defined")
+                fuMapping.each { fuName, indices ->
+                    if (!autoFuNames.contains(fuName)) {
+                        logger.lifecycle("    ${fuName.padRight(20)}: ${indices.size()} modules")
+                    }
+                }
+                if (fuMapping.containsKey('android_platform')) {
+                    logger.lifecycle("  Android/Google     : ${fuMapping['android_platform'].size()} modules (auto)")
+                }
+                if (fuMapping.containsKey('thirdparty')) {
+                    logger.lifecycle("  Third-party        : ${fuMapping['thirdparty'].size()} modules (auto)")
+                }
+                logger.lifecycle("  Report: ${config.metadataFile.absolutePath}")
+                logger.lifecycle("=================")
+
+                // --- Write module analysis report (if step 1 ran) ---
+                if (moduleAnalysisData != null) {
+                    def moduleReport = [
+                        modules: moduleAnalysisData.modules,
+                        summary: moduleAnalysisData.summary,
+                    ]
+                    config.outputFile.parentFile.mkdirs()
+                    config.outputFile.text = JsonOutput.prettyPrint(JsonOutput.toJson(moduleReport))
+                    logger.lifecycle("  Module analysis  : ${config.outputFile.absolutePath}")
+                }
+
+                // --- Write resource mapping report (if step 2 ran) ---
+                if (resourceMappingRawData != null) {
+                    def rawMapping = resourceMappingRawData.resourceMapping
+
+                    // Build negative-index mapping for FU overrides (both pattern and dir based).
+                    // Each unique FU name gets a negative index: -1, -2, -3, ...
+                    // fuNegativeIndex: fuName -> negativeInt
+                    // fuIndexLookup:   negativeInt (as String key) -> fuName   (written to JSON)
+                    def fuNegativeIndex = [:]  // fuName -> -1, -2, ...
+                    def fuIndexLookup = [:]    // "-1" -> fuName  (for JSON output)
+                    int nextNeg = -1
+                    def registerFuIndex = { String fuName ->
+                        if (!fuNegativeIndex.containsKey(fuName)) {
+                            fuNegativeIndex[fuName] = nextNeg
+                            fuIndexLookup[String.valueOf(nextNeg)] = fuName
+                            nextNeg--
+                        }
+                    }
+                    config.resourceFUOverrides?.keySet()?.each { registerFuIndex(it) }
+                    config.resourceDirFUOverrides?.keySet()?.each { registerFuIndex(it) }
+
+                    // --- Directory-based FU overrides ---
+                    // Scan configured directories and collect a set of relative resource paths
+                    // (e.g. "res/drawable-xxhdpi/node_modules_foo.webp") that belong to each FU.
+                    def dirOverrideFiles = new HashMap<String, String>()  // relativePath -> fuName
+                    if (config.resourceDirFUOverrides) {
+                        config.resourceDirFUOverrides.each { fuName, dirPaths ->
+                            dirPaths.each { dirPath ->
+                                def dir = new File(proj.projectDir, dirPath)
+                                if (!dir.exists() || !dir.isDirectory()) {
+                                    logger.warn("  resourceDirFUOverrides: dir not found: ${dir.absolutePath}")
+                                    return
+                                }
+                                dir.eachDir { typeDir ->
+                                    typeDir.eachFileRecurse { file ->
+                                        if (!file.isDirectory()) {
+                                            // Match the same format scanFilePathsFromLocalModule produces
+                                            dirOverrideFiles["res/${typeDir.name}/${file.name}"] = fuName
+                                        }
+                                    }
+                                }
+                                logger.lifecycle("  Scanned ${dirPath}: ${dirOverrideFiles.size()} RN resource files")
+                            }
+                        }
+                    }
+
+                    // Convert list values to indexed.
+                    // Positive int = module index (normal).
+                    // Negative int = FU index (direct FU, look up in fuIndex section).
+                    int fuOverrideCount = 0
+                    def indexedMapping = rawMapping.collectEntries { path, modIds ->
+                        String fuHit = null
+
+                        // 1. Check pattern-based overrides (resourceFUOverrides)
+                        if (fuHit == null && config.resourceFUOverrides) {
+                            for (entry in config.resourceFUOverrides) {
+                                if (entry.value.any { pattern -> globMatches(pattern, path) }) {
+                                    fuHit = entry.key
+                                    break
+                                }
+                            }
+                        }
+
+                        // 2. Check directory-based overrides (resourceDirFUOverrides)
+                        if (fuHit == null && dirOverrideFiles) {
+                            // Strip apk split prefix: "base/res/drawable/foo.webp" -> "res/drawable/foo.webp"
+                            def slashIdx = path.indexOf('/')
+                            def stripped = slashIdx >= 0 ? path.substring(slashIdx + 1) : path
+                            def dirFu = dirOverrideFiles[stripped]
+                            if (dirFu != null) fuHit = dirFu
+                        }
+
+                        if (fuHit != null) {
+                            fuOverrideCount++
+                            [path, [fuNegativeIndex[fuHit]]]   // [-1] — negative = direct FU
+                        } else {
+                            [path, modIds.collect { moduleIndexMap[it] }]  // [6] — positive = module index
+                        }
+                    }
+                    if (fuOverrideCount > 0) {
+                        logger.lifecycle("  FU overrides applied: ${fuOverrideCount} files")
+                    }
+                    def collisionCount = rawMapping.count { k, v -> v.size() > 1 }
+
+                    def resReport = [
+                        resourceMapping: indexedMapping,
+                        summary: [
+                            totalMappedFiles: resourceMappingRawData.totalMapped,
+                            collisions      : collisionCount,
+                            uniqueModules   : rawMapping.values().flatten().toSet().size(),
+                            byApkSplit      : rawMapping.keySet().groupBy { it.split('/')[0] }.collectEntries { k, v -> [k, v.size()] },
+                        ]
+                    ]
+                    // Add fuIndex section only when there are overrides
+                    if (fuIndexLookup) {
+                        resReport.fuIndex = fuIndexLookup
+                    }
+                    config.resourceMappingFile.parentFile.mkdirs()
+                    // Collapse small number arrays like [\n  73\n] onto one line: [73]
+                    def prettyJson = JsonOutput.prettyPrint(JsonOutput.toJson(resReport))
+                    prettyJson = prettyJson.replaceAll(/\[\s*\n\s*(-?[\d,\s]+?)\s*\n\s*\]/) { all, inner ->
+                        "[${inner.replaceAll(/\s+/, '')}]"
+                    }
+                    config.resourceMappingFile.text = prettyJson
+                    logger.lifecycle("  Resource mapping : ${config.resourceMappingFile.absolutePath}")
+                }
+
+                // --- Write package mapping report (if step 1 ran) ---
+                if (moduleAnalysisData != null) {
+                    // Build reverse index at leaf level first, then roll up ancestors.
+                    // Leaf: fullPackage -> { moduleIndex -> classCount }
+                    def leafMapping = new TreeMap()  // sorted
+                    int skippedShallow = 0
+                    int skippedOverride = 0
+
+                    moduleAnalysisData.modules.each { modId, modData ->
+                        def modIdx = moduleIndexMap[modId]
+                        if (modIdx == null) return
+
+                        modData.packages?.each { pkg, classCount ->
+                            // Apply packageOverrides: check if pkg matches any override prefix
+                            def overrideMatch = config.packageOverrides.find { prefix, action ->
+                                pkg == prefix || pkg.startsWith("${prefix}.")
+                            }
+                            if (overrideMatch != null && overrideMatch.value == 'ignore') {
+                                skippedOverride += classCount
+                                return
+                            }
+
+                            // Apply minPackageDepth to the leaf package
+                            def parts = pkg == '(default)' ? [] : pkg.split('\\.')
+                            if (parts.size() < config.minPackageDepth) {
+                                skippedShallow += classCount
+                                return
+                            }
+
+                            // Add to leaf level
+                            if (!leafMapping.containsKey(pkg)) leafMapping[pkg] = [:]
+                            leafMapping[pkg][modIdx] = (leafMapping[pkg][modIdx] ?: 0) + classCount
+
+                            // Roll up to all ancestor prefixes (down to minPackageDepth)
+                            for (int d = parts.size() - 1; d >= config.minPackageDepth; d--) {
+                                def ancestor = parts[0..<d].join('.')
+                                if (!leafMapping.containsKey(ancestor)) leafMapping[ancestor] = [:]
+                                leafMapping[ancestor][modIdx] = (leafMapping[ancestor][modIdx] ?: 0) + classCount
+                            }
+                        }
+                    }
+
+                    // Convert to final format: package -> [[moduleIndex, classCount], ...]
+                    def pkgMapping = new TreeMap()
+                    leafMapping.each { pkg, modCounts ->
+                        pkgMapping[pkg] = modCounts.collect { modIdx, count -> [modIdx, count] }
+                            .sort { -it[1] } // sort by class count descending
+                    }
+
+                    def collisions = pkgMapping.count { k, v -> v.size() > 1 }
+                    def pkgReport = [
+                        packageMapping: pkgMapping,
+                        summary: [
+                            totalPackages      : pkgMapping.size(),
+                            collisions         : collisions,
+                            skippedShallowClasses: skippedShallow,
+                            skippedOverrideClasses: skippedOverride,
+                            minPackageDepth    : config.minPackageDepth,
+                        ]
+                    ]
+                    config.packageMappingFile.parentFile.mkdirs()
+                    def pkgJson = JsonOutput.prettyPrint(JsonOutput.toJson(pkgReport))
+                    // Collapse number arrays onto single lines
+                    pkgJson = pkgJson.replaceAll(/\[\s*\n\s*([\d,\s]+?)\s*\n\s*\]/) { all, inner ->
+                        "[${inner.replaceAll(/\s+/, '')}]"
+                    }
+                    config.packageMappingFile.text = pkgJson
+
+                    logger.lifecycle("")
+                    logger.lifecycle("=== Package Mapping Summary ===")
+                    logger.lifecycle("  Packages mapped    : ${pkgMapping.size()}")
+                    logger.lifecycle("  Collisions         : ${collisions}")
+                    logger.lifecycle("  Skipped (shallow)  : ${skippedShallow} classes")
+                    logger.lifecycle("  Skipped (override) : ${skippedOverride} classes")
+                    logger.lifecycle("  Report: ${config.packageMappingFile.absolutePath}")
+                    logger.lifecycle("================================")
+                }
+            }
+        }
+    }
+}

@@ -29,4 +29,6 @@ rootProject.name = 'apkSize'
 include(':kotlin-html-master')
 project(':kotlin-html-master').projectDir = new File(rootProject.projectDir, './libs/kotlin-html-master')
 
+include(':android-gradle-plugin')
+
 
