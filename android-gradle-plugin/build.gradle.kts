@@ -4,7 +4,7 @@ plugins {
     id("com.gradle.plugin-publish") version "1.3.0"
 }
 
-group = "com.apkanalyzer"
+group = "io.github.amank22"
 version = "0.1.0"
 
 // Repositories are centrally managed in settings.gradle
@@ -18,12 +18,12 @@ dependencies {
 }
 
 gradlePlugin {
-    website.set("https://github.com/anthropics/ApkSize-Analyzer")
-    vcsUrl.set("https://github.com/anthropics/ApkSize-Analyzer")
+    website.set("https://github.com/amank22/ApkSize-Analyzer")
+    vcsUrl.set("https://github.com/amank22/ApkSize-Analyzer")
 
     plugins {
         create("moduleSizeAnalysis") {
-            id = "com.apkanalyzer.module-size-analysis"
+            id = "io.github.amank22.module-size-analysis"
             displayName = "Module Size Analysis"
             description = "Analyzes Android module and AAR dependencies to extract resource counts, " +
                 "package/class info, native library details, and produces file-level resource mapping " +
