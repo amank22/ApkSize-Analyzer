@@ -1,22 +1,29 @@
 package com.gi.apksize.tasks
 
-import com.gi.apksize.models.AnalyzerOptions
-import com.gi.apksize.models.ApkStats
-import com.gi.apksize.models.InputFileType
-import com.gi.apksize.models.LobAnalysisResult
-import com.gi.apksize.models.AttributedDetails
-import com.gi.apksize.models.DexOverheadDetails
-import com.gi.apksize.models.UnmatchedDetails
+import com.gi.apksize.models.*
 import com.gi.apksize.ui.DiffHtmlGenerator
 import com.gi.apksize.ui.HtmlGenerator
 import com.gi.apksize.utils.Printer
 import com.gi.apksize.utils.compareHolder
 import com.gi.apksize.utils.primaryHolder
 import com.google.gson.GsonBuilder
+import java.nio.file.Files
+import java.nio.file.StandardCopyOption
+import java.util.zip.ZipFile
 //import com.gi.apksize.ui.PdfGenerator
 import java.io.File
 
 object ApkSizeTask {
+
+    /**
+     * Returns true if bundletool's Java API is available on the classpath (full JAR).
+     */
+    private fun isBundletoolEmbedded(): Boolean = try {
+        Class.forName("com.android.tools.build.bundletool.model.AppBundle")
+        true
+    } catch (_: ClassNotFoundException) {
+        false
+    }
 
     fun evaluate(analyzerOptions: AnalyzerOptions) {
         val isAab = analyzerOptions.inputFileType() == InputFileType.AAB
@@ -25,6 +32,25 @@ object ApkSizeTask {
             analyzerOptions.primaryHolder()
         } else {
             analyzerOptions.compareHolder()
+        }
+
+        // AAB with lite JAR: check if we can handle it
+        if (isAab && !isBundletoolEmbedded()) {
+            if (analyzerOptions.bundletoolJarPath.isBlank()) {
+                Printer.error(
+                    "AAB analysis requires bundletool. Either use the full JAR (apkSize-*-full.jar) " +
+                    "or set 'bundletoolJarPath' in config to point to a bundletool JAR."
+                )
+                return
+            }
+            val bundletoolJar = java.io.File(analyzerOptions.bundletoolJarPath)
+            if (!bundletoolJar.exists()) {
+                Printer.error("bundletoolJarPath does not exist: ${analyzerOptions.bundletoolJarPath}")
+                return
+            }
+            Printer.log("Using external bundletool JAR: ${bundletoolJar.absolutePath}")
+            evaluateAabViaCliAndApkAnalysis(analyzerOptions, holder)
+            return
         }
 
         val task = when {
@@ -158,6 +184,126 @@ object ApkSizeTask {
             apkSizeReportFile.createNewFile()
         }
 //        PdfGenerator.generate(html, apkSizeReportFile)
+    }
+
+    // -----------------------------------------------------------------------
+    //  Lite JAR fallback: AAB → APK via external bundletool CLI, then analyze
+    // -----------------------------------------------------------------------
+
+    /**
+     * Handles AAB analysis when bundletool is NOT on the classpath (lite JAR).
+     * Uses external bundletool CLI to convert AAB → universal APK, then runs
+     * standard APK analysis via [SingleStatsTask].
+     */
+    private fun evaluateAabViaCliAndApkAnalysis(
+        analyzerOptions: AnalyzerOptions,
+        holder: DataHolder,
+    ) {
+        val bundletoolJar = File(analyzerOptions.bundletoolJarPath)
+        val aabPath = holder.primaryFile.file.absolutePath
+
+        // 1. Generate universal APK from AAB via bundletool CLI
+        val tempApksFile = Files.createTempFile("bundletool-cli-", ".apks").toFile()
+        val tempApkFile = Files.createTempFile("bundletool-cli-universal-", ".apk").toFile()
+        try {
+            Printer.log("Generating universal APK from AAB via external bundletool CLI...")
+            val buildApksArgs = mutableListOf(
+                "java", "-jar", bundletoolJar.absolutePath,
+                "build-apks",
+                "--bundle=$aabPath",
+                "--output=${tempApksFile.absolutePath}",
+                "--overwrite",
+                "--mode=universal"
+            )
+
+            // Add aapt2 path if available
+            val aapt2Path = resolveAapt2ForCli(analyzerOptions)
+            if (aapt2Path != null) {
+                buildApksArgs.add("--aapt2=$aapt2Path")
+            }
+
+            val buildResult = runCliCommand(buildApksArgs)
+            if (buildResult != 0) {
+                Printer.error("bundletool build-apks failed (exit code $buildResult). Cannot analyze AAB with lite JAR.")
+                return
+            }
+
+            // 2. Extract universal APK from the .apks zip archive
+            extractUniversalApkFromArchive(tempApksFile, tempApkFile)
+            Printer.log("Extracted universal APK for analysis.")
+
+            // 3. Run standard APK analysis on the generated APK
+            val apkHolder = holder.copy(
+                primaryFile = FileHolder(
+                    file = tempApkFile,
+                    proguardFile = holder.primaryFile.proguardFile
+                )
+            )
+            val apkStats = SingleStatsTask.process(apkHolder)
+            apkStats.inputFileType = InputFileType.AAB
+            apkStats.isInstallTimeApkAnalysis = true
+
+            Printer.log("tasks done : $apkStats")
+            apkStats.apkName = analyzerOptions.appName
+
+            val outputFolder = holder.outputDir
+            writeApkStatsToJsonFile(apkStats, outputFolder)
+            Printer.log("writeApkStatsToJsonFile done")
+            writeApkStatsToHtmlFile(apkStats, outputFolder, isDiffMode = false)
+
+        } finally {
+            kotlin.runCatching { tempApksFile.delete() }
+            kotlin.runCatching { tempApkFile.delete() }
+        }
+
+        val fileTypeLabel = "AAB"
+        Printer.log("Analysed $fileTypeLabel (via lite JAR + external bundletool). " +
+                "Output at ${analyzerOptions.outputFolderPath}.")
+    }
+
+    private fun extractUniversalApkFromArchive(apksFile: File, targetApkFile: File) {
+        ZipFile(apksFile).use { zip ->
+            val apkEntries = zip.entries().asSequence()
+                .filter { !it.isDirectory && it.name.endsWith(".apk", ignoreCase = true) }
+                .toList()
+            if (apkEntries.isEmpty()) {
+                error("No APK entries found in generated .apks archive.")
+            }
+            val entry = apkEntries.firstOrNull { it.name.contains("universal", ignoreCase = true) }
+                ?: apkEntries.maxByOrNull { if (it.size >= 0) it.size else it.compressedSize.coerceAtLeast(0) }
+                ?: error("Could not select APK entry from .apks archive.")
+            zip.getInputStream(entry).use { input ->
+                Files.copy(input, targetApkFile.toPath(), StandardCopyOption.REPLACE_EXISTING)
+            }
+        }
+    }
+
+    private fun runCliCommand(args: List<String>): Int {
+        val process = ProcessBuilder(args)
+            .redirectErrorStream(true)
+            .start()
+        // Stream output to our logger
+        process.inputStream.bufferedReader().forEachLine { line ->
+            Printer.log("[bundletool] $line")
+        }
+        return process.waitFor()
+    }
+
+    private fun resolveAapt2ForCli(options: AnalyzerOptions): String? {
+        if (options.aapt2Executor.isNotBlank()) {
+            val f = File(options.aapt2Executor)
+            if (f.exists() && f.canExecute()) return f.absolutePath
+        }
+        val sdkRoot = System.getenv("ANDROID_HOME") ?: System.getenv("ANDROID_SDK_ROOT") ?: return null
+        val buildToolsDir = File(sdkRoot, "build-tools")
+        if (!buildToolsDir.exists()) return null
+        return buildToolsDir.listFiles()
+            ?.filter { it.isDirectory }
+            ?.sortedDescending()
+            ?.firstNotNullOfOrNull { dir ->
+                val aapt2 = File(dir, "aapt2")
+                if (aapt2.exists() && aapt2.canExecute()) aapt2.absolutePath else null
+            }
     }
 
 }

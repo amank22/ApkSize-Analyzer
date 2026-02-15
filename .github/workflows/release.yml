@@ -1,0 +1,157 @@
+name: Build & Release
+
+on:
+  release:
+    types: [created]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag to attach artifacts to (leave empty for artifact-only build)'
+        required: false
+        type: string
+
+permissions:
+  contents: write
+
+env:
+  JAVA_VERSION: '21'
+  GRAALVM_VERSION: '21'
+
+jobs:
+  # -------------------------------------------------------------------------
+  #  Build JARs (runs once on Linux — JARs are platform-independent)
+  # -------------------------------------------------------------------------
+  build-jars:
+    name: Build JARs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK ${{ env.JAVA_VERSION }}
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: ${{ env.JAVA_VERSION }}
+
+      - name: Cache Gradle
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-jars-${{ hashFiles('**/*.gradle*', 'gradle/wrapper/gradle-wrapper.properties') }}
+          restore-keys: gradle-jars-
+
+      - name: Build all JARs
+        run: ./gradlew clean assemble --no-daemon
+
+      - name: List artifacts
+        run: ls -lh build/libs/
+
+      - name: Upload JAR artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: jars
+          path: |
+            build/libs/*-full.jar
+            build/libs/*-lite-r8.jar
+          retention-days: 7
+
+  # -------------------------------------------------------------------------
+  #  Build native binaries (matrix: Linux x64, macOS ARM, macOS x64)
+  # -------------------------------------------------------------------------
+  build-native:
+    name: Native — ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: linux-x64
+            os: ubuntu-latest
+            artifact-suffix: linux-x64
+          - name: macos-arm64
+            os: macos-latest         # Apple Silicon runners
+            artifact-suffix: macos-arm64
+          - name: macos-x64
+            os: macos-13             # Intel macOS runners
+            artifact-suffix: macos-x64
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up GraalVM CE ${{ env.GRAALVM_VERSION }}
+        uses: graalvm/setup-graalvm@v1
+        with:
+          java-version: ${{ env.GRAALVM_VERSION }}
+          distribution: 'graalvm-community'
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Verify native-image
+        run: native-image --version
+
+      - name: Cache Gradle
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-native-${{ matrix.artifact-suffix }}-${{ hashFiles('**/*.gradle*', 'gradle/wrapper/gradle-wrapper.properties') }}
+          restore-keys: gradle-native-${{ matrix.artifact-suffix }}-
+
+      - name: Build native image
+        run: ./gradlew nativeImageLite --no-daemon
+
+      - name: Rename binary with platform suffix
+        run: mv build/native/apksize build/native/apksize-${{ matrix.artifact-suffix }}
+
+      - name: Upload native artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-${{ matrix.artifact-suffix }}
+          path: build/native/apksize-${{ matrix.artifact-suffix }}
+          retention-days: 7
+
+  # -------------------------------------------------------------------------
+  #  Upload all artifacts to the GitHub Release
+  # -------------------------------------------------------------------------
+  upload-release:
+    name: Upload to Release
+    if: github.event_name == 'release' || github.event.inputs.tag != ''
+    needs: [build-jars, build-native]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Determine release tag
+        id: tag
+        run: |
+          if [ "${{ github.event_name }}" = "release" ]; then
+            echo "tag=${{ github.event.release.tag_name }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=${{ github.event.inputs.tag }}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: List downloaded artifacts
+        run: find artifacts -type f | sort
+
+      - name: Upload assets to release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${{ steps.tag.outputs.tag }}"
+          echo "Uploading to release: $TAG"
+
+          # Upload JARs
+          for f in artifacts/jars/*.jar; do
+            echo "  Uploading $(basename "$f")"
+            gh release upload "$TAG" "$f" --repo "${{ github.repository }}" --clobber
+          done
+
+          # Upload native binaries
+          for f in artifacts/native-*/apksize-*; do
+            echo "  Uploading $(basename "$f")"
+            gh release upload "$TAG" "$f" --repo "${{ github.repository }}" --clobber
+          done

@@ -1,10 +1,12 @@
 ![Logo](/screenshots/ApkSize.svg)
 
-ApkSize Analyzer is a command line java program to analyze the size of APK and AAB (Android App Bundle) files and give report in multiple formats
-which you can then use in CI/CD environments (jenkins etc) to get deeper insights for your app.
+ApkSize Analyzer is a command line tool to analyze the size of APK and AAB (Android App Bundle) files and give reports in multiple formats
+which you can then use in CI/CD environments (Jenkins etc) to get deeper insights for your app.
 
-It can also be used to compare two APKs and generate report of the differences. You can do it in Android Studio also right?
+It can also be used to compare two APKs and generate a report of the differences. You can do it in Android Studio also right?
 This will give you differences on source packages level so that you know what code exactly increased and not just differences in dex files.
+
+**Available as:** JVM JAR (requires JDK 21+) **or** native binary (no JDK needed, instant startup).
 
 #### Features:
 * Analyzes **APK** and **AAB** files for files, dex, resources.
@@ -22,14 +24,38 @@ This will give you differences on source packages level so that you know what co
 * Bundle config analysis (split dimensions, compression settings)
 * Maven dependency list from bundle metadata
 
-Example command to run analyzer:
+#### Download
 
-This needs a json file as input which contains all the arguments as defined below.
-This is done because of large number of variables you can change in customise result according to your needs.
-You can find sample config.json in samples directory of this project.
+Grab the latest release from [GitHub Releases](../../releases). Each release includes:
 
-`java -jar apkSize-0.2-beta-all.jar relative --config=input/config.json`
-<br><br>
+| Artifact | Description |
+|----------|-------------|
+| `apkSize-*-full.jar` | Fat JAR with bundletool embedded (~48 MB). Analyzes both APK and AAB standalone. |
+| `apkSize-*-lite-r8.jar` | R8-minified JAR (~5 MB). For AAB, supply an external bundletool JAR. |
+| `apksize-linux-x64` | Native binary for Linux x64 (no JDK needed). |
+| `apksize-macos-arm64` | Native binary for macOS Apple Silicon (no JDK needed). |
+| `apksize-macos-x64` | Native binary for macOS Intel (no JDK needed). |
+
+#### Usage
+
+This needs a JSON config file as input which contains all the arguments as defined below.
+You can find sample configs in the `samples/configs/` directory.
+
+**Full JAR (APK or AAB):**
+
+`java -jar apkSize-0.4.0-alpha-full.jar abs --config=input/config.json`
+
+**Lite JAR (AAB with external bundletool):**
+
+`java -jar apkSize-0.4.0-alpha-lite-r8.jar abs --config=input/config.json --bundletoolJarPath=/path/to/bundletool-all.jar`
+
+**Native binary (no JDK needed):**
+
+`./apksize abs --config=input/config.json --bundletoolJarPath=/path/to/bundletool-all.jar`
+
+> **Note:** JARs require JDK 21+ to run. Native binaries have no runtime dependencies.
+
+<br>
 
 **How to compare 2 apks?**
 For comparing 2 apks, along with apk paths, there are arguments for comparing.
@@ -174,18 +200,112 @@ For comparing 2 apks, along with apk paths, there are arguments for comparing.
     
 **AAB Example:**
 
-`java -jar apkSize-0.3-all.jar relative --config=input/config-aab.json`
+`java -jar apkSize-0.4.0-alpha-full.jar abs --config=samples/configs/config-aab.json`
 
 Just point `inputFilePath` to an `.aab` file instead of an `.apk` file. The tool auto-detects the file type.
-For AAB files, resource analysis is done via bundletool library (no `aapt2Executor` needed).
+For AAB files, resource analysis is done via the bundletool library (no `aapt2Executor` needed).
+
+> **Tip:** If you use the lite JAR or native binary, set `bundletoolJarPath` either as a CLI argument
+> (`--bundletoolJarPath=/path/to/bundletool-all.jar`) or directly in the config JSON:
+> ```json
+> { "bundletoolJarPath": "/path/to/bundletool-all.jar" }
+> ```
+
 Note: Comparison (diff) mode is not yet supported for AAB files.
+
+#### LOB (Line-of-Business) Size Analysis
+
+LOB analysis attributes every byte in your APK/AAB to a **functional unit** (LOB) — such as "Hotels", "Flights",
+"Payments", etc. This lets you answer: *"How much of the app size does each team/feature own?"*
+
+It requires three mapping files produced by a Gradle plugin that runs during your app build:
+
+| File | Purpose |
+|------|---------|
+| `module-metadata.json` | Lists all Gradle modules and groups them into functional units (LOBs). |
+| `resource-mapping.json` | Maps every file path (res, assets, native libs) to module indices. |
+| `package-mapping.json` | Maps every DEX package to `[moduleIndex, classCount]` pairs. |
+
+**How to enable:**
+
+Set `moduleMappingsPath` in your config JSON to the directory (or `.zip`) containing the three files:
+
+```json
+{
+  "inputFilePath": "/path/to/app-release.aab",
+  "outputFolderPath": "/path/to/output",
+  "moduleMappingsPath": "/path/to/module-mappings/",
+  "appPackagePrefix": ["com.yourapp"],
+  "appModulePrefixes": ["com.yourapp"]
+}
+```
+
+`appPackagePrefix` and `appModulePrefixes` improve accuracy by letting the analyzer distinguish your
+app's own code/files from third-party libraries during fallback attribution.
+
+**How it works:**
+
+1. **File attribution** — Each file in the APK/AAB is matched against `resource-mapping.json` to find
+   which module (and therefore which LOB) owns it. Files are categorized as `resources`, `assets`,
+   `nativeLibs`, or `other`.
+
+2. **DEX attribution** — Each DEX package is matched against `package-mapping.json`. When a package
+   maps to multiple modules, bytes are split proportionally by class count. The analyzer walks up
+   the package hierarchy (e.g. `a.b.c.d` → `a.b.c` → `a.b`) to find ancestor mappings for
+   unmapped leaf packages.
+
+3. **Fallback attribution** — Known platform packages (`android`, `androidx`, `dagger`, etc.) are
+   auto-attributed to `android_platform`. Non-app packages are attributed to `thirdparty`. This
+   reduces unmatched noise without mapping files for third-party code.
+
+4. **DEX normalization** — Package-level sizes from dexlib2 may not perfectly match raw `.dex` file
+   bytes. The analyzer applies proportional normalization so LOB totals reconcile with actual file sizes.
+
+**Output:**
+
+When `moduleMappingsPath` is set, the output directory will contain:
+
+| File | Content |
+|------|---------|
+| `apkstats.json` | Main report — includes `lobAnalysis` with per-LOB size breakdown (code, resources, assets, nativeLibs, other, total) and a coverage summary. |
+| `lob-unmatched-details.json` | Files and DEX packages that could not be attributed to any LOB — useful for improving mapping coverage. |
+| `lob-attributed-details.json` | Per-LOB detailed list of every file and DEX package attributed — useful for auditing. |
+| `lob-dex-overhead-details.json` | DEX structural overhead breakdown (headers, string pools, etc.) not attributable to individual packages. |
+
+**Example `lobAnalysis` output:**
+
+```json
+{
+  "lobSizes": {
+    "hotels": { "code": 5242880, "resources": 1048576, "assets": 0, "nativeLibs": 0, "other": 524288, "total": 6815744 },
+    "flights": { "code": 3145728, "resources": 524288, "assets": 262144, "nativeLibs": 0, "other": 131072, "total": 4063232 }
+  },
+  "summary": {
+    "totalAttributedBytes": 10878976,
+    "totalUnattributedBytes": 524288,
+    "coveragePercent": 95.4
+  }
+}
+```
+
+#### Building from Source
+
+```bash
+./gradlew clean assemble          # Builds full + lite-r8 JARs
+./gradlew nativeImageLite          # Builds native binary (requires GRAALVM_HOME)
+```
+
+* **JDK 21+** (auto-provisioned by the Gradle wrapper via foojay toolchain resolver)
+* **Gradle 8.14.4** (bundled via wrapper)
+* **Kotlin 2.3.10**
+* **GraalVM CE 21+** (only for native binary builds; set `GRAALVM_HOME`)
+
+See [README-DEVELOPMENT.md](README-DEVELOPMENT.md) for full development setup, GraalVM config regeneration, and CI/CD details.
 
 #### Future tasks:
 * Add Test Cases
-* Integrate with CI/CD
-* Make proguard or other minification tool work and reduce the size
 * Make HTML report for appPackages more readable
-* Make it as a gradle plugin
+* Make it as a Gradle plugin
 * AAB comparison (diff) mode support
 * PDF report generation
 

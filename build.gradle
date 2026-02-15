@@ -1,38 +1,46 @@
 plugins {
     id 'application'
-    id 'org.jetbrains.kotlin.jvm' version '1.9.0'
+    id 'org.jetbrains.kotlin.jvm' version '2.3.10'
     id 'java-library'
-    id 'com.github.johnrengelman.shadow' version '7.0.0'
+    id 'com.github.johnrengelman.shadow' version '8.1.0'
     id 'maven-publish'
 }
 
 configurations {
     r8
+    // Isolates bundletool + its heavy transitive deps so the lite shadow JAR can exclude them.
+    bundletool
 }
 
 group = 'com.gi.plugins'
-version = '0.4.0-alpha'
+version = '0.4.0-alpha2'
 def androidToolsVersion = '31.1.0-rc01'
 def protobufVersion = '4.33.5'
 
 dependencies {
     implementation platform('org.jetbrains.kotlin:kotlin-bom')
-    implementation 'org.jetbrains.kotlin:kotlin-stdlib-jdk8'
     implementation 'com.google.code.gson:gson:2.9.0'
     implementation "com.android.tools:common:$androidToolsVersion"
     implementation "com.android.tools.apkparser:apkanalyzer:$androidToolsVersion"
     implementation "com.android.tools.apkparser:binary-resources:$androidToolsVersion"
     // https://mvnrepository.com/artifact/com.android.tools.smali/smali-dexlib2
     implementation("com.android.tools.smali:smali-dexlib2:3.0.3")
-    implementation "org.jetbrains.kotlinx:kotlinx-metadata-jvm:0.7.0"
+    // Moved from kotlinx-metadata-jvm to kotlin-metadata-jvm in Kotlin 2.x
+    implementation "org.jetbrains.kotlin:kotlin-metadata-jvm"
     implementation group: 'org.smali', name: 'dexlib2', version: '2.5.2'
-    // https://mvnrepository.com/artifact/com.android.tools.build/bundletool
+
+    // --- Bundletool & friends (also in 'bundletool' config for lite JAR exclusion) ---
     implementation("com.android.tools.build:bundletool:1.18.3")
+    bundletool("com.android.tools.build:bundletool:1.18.3")
     // Required by bundletool for protobuf-based bundle config/metadata parsing
     implementation("com.google.protobuf:protobuf-java:$protobufVersion")
+    bundletool("com.google.protobuf:protobuf-java:$protobufVersion")
     implementation("com.google.protobuf:protobuf-java-util:$protobufVersion")
+    bundletool("com.google.protobuf:protobuf-java-util:$protobufVersion")
     // Source: https://mvnrepository.com/artifact/com.android.tools.build/aapt2-proto
     implementation("com.android.tools.build:aapt2-proto:9.0.0-14304508")
+    bundletool("com.android.tools.build:aapt2-proto:9.0.0-14304508")
+
 //    implementation 'org.celtric.kotlin:kotlin-html:0.1.4'
     implementation(project(':kotlin-html-master'))
 //    implementation group: 'com.openhtmltopdf', name: 'openhtmltopdf-pdfbox', version: '1.0.8'
@@ -41,22 +49,46 @@ dependencies {
 
     testImplementation 'org.jetbrains.kotlin:kotlin-test-junit'
 
-    r8 'com.android.tools:r8:3.3.28'
+    // R8 8.x supports Java 21 bytecode (class file major version 65)
+    r8 'com.android.tools:r8:8.8.25'
 }
-compileKotlin {
-    def compilerArgs = ["-Xopt-in=kotlin.RequiresOptIn"]
-    kotlinOptions {
-        jvmTarget = '1.8'
-        freeCompilerArgs += compilerArgs
-    }
-}
-application {
-    mainClassName = 'MainKt'
+kotlin {
+    jvmToolchain(21)
 }
 
-shadowJar {
-    zip64 true
-    mergeServiceFiles {
+java {
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(21)
+        // Enables Gradle to select JDKs with native-image support (GraalVM)
+        // Gradle 8.14+ feature — used when building native binaries
+        nativeImageCapable = true
+    }
+}
+
+application {
+    mainClass.set('MainKt')
+}
+
+// Bundletool + its unique heavy transitive deps to exclude from the lite JAR.
+// We list these explicitly to avoid accidentally excluding shared deps like Gson.
+def bundletoolExcludeDeps = [
+        'com.android.tools.build:bundletool',
+        'com.android.tools.build:aapt2-proto',
+        'com.google.protobuf:protobuf-java',
+        'com.google.protobuf:protobuf-java-util',
+        'com.google.auto.value:auto-value-annotations',
+        'com.google.dagger:dagger',
+        'javax.inject:javax.inject',
+        'org.bitbucket.b_c:jose4j',
+        'org.slf4j:slf4j-api',
+        'org.checkerframework:checker-qual',
+]
+
+// ---------------------------------------------------------------------------
+//  Common shadowJar excludes shared by both full and lite variants
+// ---------------------------------------------------------------------------
+def commonShadowExcludes = { jarTask ->
+    jarTask.mergeServiceFiles {
         exclude "META-INF/*.SF"
         exclude 'META-INF/*.DSA'
         exclude 'META-INF/*.RSA'
@@ -64,35 +96,81 @@ shadowJar {
         exclude 'META-INF/services/**'
         exclude 'META-INF/proguard/**'
     }
-    exclude '**/*.properties'
-    exclude "LICENSE*"
-    exclude '**/*.kotlin_builtins'
-    exclude '**/*.kotlin_metadata'
-    exclude '**/*.kotlin_module'
-    exclude '**/*.kotlin_builtins'
-//    exclude '**/*.txt'
-    exclude '**/*.xml'
-    exclude '**/private-apis.txt'
-    exclude '**/public-suffix-list.txt'
-    exclude '**/module-info.class'
-    exclude '**/*.proto'
-    exclude '**/*.icc'
-    exclude 'com/sun/**'
-    exclude 'typos/**'
-    exclude 'xsd/**'
-    exclude 'com/android/dvlib/**'
-    exclude 'com/android/sdklib/**'
-    exclude 'com/intellij/**'
+    // Strip JAR signing files at top level (prevents SecurityException when running)
+    jarTask.exclude 'META-INF/*.SF'
+    jarTask.exclude 'META-INF/*.DSA'
+    jarTask.exclude 'META-INF/*.RSA'
+    jarTask.exclude '**/*.properties'
+    jarTask.exclude "LICENSE*"
+    jarTask.exclude '**/*.kotlin_builtins'
+    jarTask.exclude '**/*.kotlin_metadata'
+    jarTask.exclude '**/*.kotlin_module'
+    jarTask.exclude '**/*.kotlin_builtins'
+//    jarTask.exclude '**/*.txt'
+    jarTask.exclude '**/*.xml'
+    jarTask.exclude '**/private-apis.txt'
+    jarTask.exclude '**/public-suffix-list.txt'
+    jarTask.exclude '**/module-info.class'
+    jarTask.exclude '**/*.proto'
+    jarTask.exclude '**/*.icc'
+    jarTask.exclude 'com/sun/**'
+    jarTask.exclude 'typos/**'
+    jarTask.exclude 'xsd/**'
+    jarTask.exclude 'com/android/dvlib/**'
+    jarTask.exclude 'com/android/sdklib/**'
+    jarTask.exclude 'com/intellij/**'
 }
 
-def r8File = new File("$buildDir/libs/$archivesBaseName-r8.jar")
+// ---------------------------------------------------------------------------
+//  FULL variant: default shadowJar — includes bundletool, no R8.
+// ---------------------------------------------------------------------------
+shadowJar {
+    archiveClassifier.set('full')
+    zip64 = true
+    commonShadowExcludes(it)
+
+    // Bundletool-specific bloat reduction (safe for the full JAR)
+    exclude '**/*.dex'                 // embedded DEX files (archive mode)
+    exclude 'org/jose4j/**'           // JWT lib — only for code-transparency signing
+    exclude 'org/checkerframework/**' // compile-time annotations
+}
+
+// ---------------------------------------------------------------------------
+//  LITE variant: excludes bundletool + all its transitive deps.
+// ---------------------------------------------------------------------------
+def shadowJarLite = tasks.register('shadowJarLite', com.github.jengelman.gradle.plugins.shadow.tasks.ShadowJar) { task ->
+    task.group = 'shadow'
+    task.description = 'Builds a lite shadow JAR without bundletool dependencies.'
+    task.archiveClassifier.set('lite')
+    task.zip64 = true
+    task.configurations = [project.configurations.runtimeClasspath]
+    task.from(sourceSets.main.output)
+    task.manifest {
+        attributes 'Main-Class': 'MainKt'
+    }
+
+    commonShadowExcludes(task)
+
+    // Exclude bundletool + its unique heavy transitive deps.
+    bundletoolExcludeDeps.each { spec ->
+        task.dependencies {
+            exclude(dependency(spec))
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+//  R8 minification — only on the LITE JAR (no bundletool = no R8 headaches).
+// ---------------------------------------------------------------------------
+def r8File = new File("$buildDir/libs/${project.name}-${version}-lite-r8.jar")
 def r8Jar = tasks.register('r8Jar', JavaExec) { task ->
     def rules = file('src/main/shrink-rules.pro')
-    task.inputs.files(shadowJar.outputs.files, rules)
+    task.dependsOn(shadowJarLite)
+    task.inputs.files(shadowJarLite.map { it.outputs.files }, rules)
     task.outputs.file(r8File)
 
     task.classpath(configurations.r8)
-    task.main = 'com.android.tools.r8.R8'
+    task.mainClass.set('com.android.tools.r8.R8')
     task.args = [
             '--release',
             '--classfile',
@@ -101,14 +179,78 @@ def r8Jar = tasks.register('r8Jar', JavaExec) { task ->
             '--lib', System.properties.get('java.home').toString()
     ]
     doFirst {
-        task.args += shadowJar.archiveFile.get().asFile
+        task.args += shadowJarLite.get().archiveFile.get().asFile
+    }
+    // R8 8.x does not preserve the JAR manifest — re-inject Main-Class so
+    // `java -jar` works on the minified output.
+    doLast {
+        def mf = new File(task.temporaryDir, 'MANIFEST.MF')
+        mf.text = "Manifest-Version: 1.0\nMain-Class: MainKt\n"
+        ant.jar(destfile: r8File.toString(), update: true, manifest: mf.toString())
     }
 }
 
 task minimizedJar(dependsOn: r8Jar)
 
 tasks.named('assemble').configure { task ->
+    task.dependsOn(shadowJar, r8Jar)
+}
+
+// ---------------------------------------------------------------------------
+//  GraalVM native-image — builds a native binary from the lite R8 JAR.
+//  Requires GRAALVM_HOME to be set (or a GraalVM JDK on PATH).
+//  Configs in src/main/graalvm/ are generated by the tracing agent.
+// ---------------------------------------------------------------------------
+def nativeImageLite = tasks.register('nativeImageLite', Exec) { task ->
+    task.group = 'native'
+    task.description = 'Builds a GraalVM native-image binary from the lite R8 JAR.'
     task.dependsOn(r8Jar)
+
+    def nativeDir = new File("$buildDir/native")
+    def binaryName = 'apksize'
+    def nativeConfigDir = file('src/main/graalvm')
+
+    task.inputs.file(r8File)
+    task.inputs.dir(nativeConfigDir)
+    task.outputs.file(new File(nativeDir, binaryName))
+
+    // Resolve native-image from GRAALVM_HOME, falling back to PATH
+    def graalHome = System.getenv('GRAALVM_HOME') ?: ''
+    def nativeImageExe = graalHome ? "${graalHome}/bin/native-image" : 'native-image'
+
+    task.commandLine nativeImageExe,
+            '-jar', r8File.toString(),
+            '-o', new File(nativeDir, binaryName).toString(),
+            '--no-fallback',
+            '-H:+ReportExceptionStackTraces',
+            "-H:ConfigurationFileDirectories=${nativeConfigDir.absolutePath}",
+            // Allow incomplete classpath — some optional deps (bundletool) are absent in the lite JAR
+            '--allow-incomplete-classpath'
+
+    task.doFirst {
+        nativeDir.mkdirs()
+    }
+}
+
+// Regenerate GraalVM configs by running the lite JAR with the tracing agent.
+// Usage: ./gradlew nativeImageAgentConfig -PnativeTestArgs='abs --config=...'
+def nativeImageAgentConfig = tasks.register('nativeImageAgentConfig', Exec) { task ->
+    task.group = 'native'
+    task.description = 'Runs the lite JAR with GraalVM tracing agent to (re)generate native-image configs.'
+    task.dependsOn(r8Jar)
+
+    def configDir = file('src/main/graalvm')
+    def graalHome = System.getenv('GRAALVM_HOME') ?: ''
+    def javaExe = graalHome ? "${graalHome}/bin/java" : 'java'
+    def testArgs = (project.findProperty('nativeTestArgs') ?: '').toString().split(' ').findAll { it }
+
+    task.commandLine([javaExe,
+            "-agentlib:native-image-agent=config-output-dir=${configDir.absolutePath}",
+            '-jar', r8File.toString()] + testArgs)
+
+    task.doFirst {
+        configDir.mkdirs()
+    }
 }
 
 publishing {

@@ -3,20 +3,14 @@ plugins {
     id 'maven-publish'
 }
 
-group "org.celtric.kotlin"
-version "0.1.4"
+group = "org.celtric.kotlin"
+version = "0.1.4"
 
+kotlin {
+    jvmToolchain(21)
+}
 
 dependencies {
     implementation platform('org.jetbrains.kotlin:kotlin-bom')
-    implementation 'org.jetbrains.kotlin:kotlin-stdlib-jdk8'
     testImplementation 'org.jetbrains.kotlin:kotlin-test-junit'
-}
-
-compileKotlin {
-    def compilerArgs = ["-Xopt-in=kotlin.RequiresOptIn"]
-    kotlinOptions {
-        jvmTarget = '1.8'
-        freeCompilerArgs += compilerArgs
-    }
 }

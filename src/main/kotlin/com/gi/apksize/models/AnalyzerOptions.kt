@@ -120,6 +120,16 @@ data class AnalyzerOptions(
     val aabDeviceSpecPath: String = "",
     //endregion
 
+    /**
+     * Path to a bundletool JAR file for AAB analysis when bundletool is not
+     * embedded in the analyzer JAR (i.e. when using the lite variant).
+     * The tool will shell out to:
+     *   java -jar <bundletoolJarPath> build-apks ...
+     *   java -jar <bundletoolJarPath> get-size total ...
+     * If empty and bundletool is not on the classpath, AAB analysis is skipped.
+     */
+    val bundletoolJarPath: String = "",
+
     //region Aapt Configs
 
     /**
