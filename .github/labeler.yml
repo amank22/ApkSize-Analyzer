@@ -1,0 +1,38 @@
+# Configuration for actions/labeler@v5
+# Docs: https://github.com/actions/labeler
+
+build:
+  - changed-files:
+      - any-glob-to-any-file:
+          - 'build.gradle'
+          - 'settings.gradle'
+          - 'gradle/**'
+          - 'libs/**/build.gradle'
+
+ci:
+  - changed-files:
+      - any-glob-to-any-file:
+          - '.github/**'
+
+documentation:
+  - changed-files:
+      - any-glob-to-any-file:
+          - '*.md'
+          - '*.MD'
+          - 'docs/**'
+
+source:
+  - changed-files:
+      - any-glob-to-any-file:
+          - 'src/main/kotlin/**'
+
+native-image:
+  - changed-files:
+      - any-glob-to-any-file:
+          - 'src/main/graalvm/**'
+          - 'src/main/shrink-rules.pro'
+
+samples:
+  - changed-files:
+      - any-glob-to-any-file:
+          - 'samples/**'
