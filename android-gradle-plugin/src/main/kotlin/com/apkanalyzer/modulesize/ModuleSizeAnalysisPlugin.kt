@@ -11,7 +11,7 @@ import org.gradle.api.Project
  *
  * ```kotlin
  * plugins {
- *     id("com.apkanalyzer.module-size-analysis") version "0.1.0"
+ *     id("io.github.amank22.module-size-analysis") version "0.2.0"
  * }
  *
  * moduleSizeAnalysis {

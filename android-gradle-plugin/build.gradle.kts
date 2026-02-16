@@ -5,7 +5,7 @@ plugins {
 }
 
 group = "io.github.amank22"
-version = "0.1.0"
+version = "0.2.0"
 
 // Repositories are centrally managed in settings.gradle
 
@@ -18,17 +18,19 @@ dependencies {
 }
 
 gradlePlugin {
-    website.set("https://github.com/amank22/ApkSize-Analyzer")
+    website.set("https://github.com/amank22/ApkSize-Analyzer/tree/main/android-gradle-plugin")
     vcsUrl.set("https://github.com/amank22/ApkSize-Analyzer")
 
     plugins {
         create("moduleSizeAnalysis") {
             id = "io.github.amank22.module-size-analysis"
             displayName = "Module Size Analysis"
-            description = "Analyzes Android module and AAR dependencies to extract resource counts, " +
-                "package/class info, native library details, and produces file-level resource mapping " +
-                "for APK size attribution across functional units."
-            tags.set(listOf("android", "apk", "size-analysis", "module-analysis", "aar"))
+            description = "Scans all Android Gradle modules and their AAR/JAR dependencies at build time, " +
+                "producing JSON mapping files (module metadata, resource mapping, package mapping) " +
+                "that power per-LOB (Line-of-Business) APK size attribution in the ApkSize Analyzer CLI. " +
+                "Supports dynamic feature modules, functional unit grouping, and fine-grained overrides."
+            tags.set(listOf("android", "apk-size", "size-analysis", "module-analysis", "aar",
+                "lob-attribution", "dependency-analysis", "build-reporting"))
             implementationClass = "com.apkanalyzer.modulesize.ModuleSizeAnalysisPlugin"
         }
     }
