@@ -21,6 +21,7 @@ on:
 
 env:
   DETEKT_RELEASE_TAG: v1.23.8
+  DETEKT_VERSION: 1.23.8
 
 jobs:
 
@@ -49,22 +50,27 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
       - name: Setup Detekt
         run: |
           dest=$( mktemp -d )
           curl --request GET \
-            --url "https://github.com/detekt/detekt/releases/download/${DETEKT_RELEASE_TAG}/detekt" \
+            --url "https://github.com/detekt/detekt/releases/download/${DETEKT_RELEASE_TAG}/detekt-cli-${DETEKT_VERSION}-all.jar" \
             --silent \
             --location \
             --fail \
-            --output $dest/detekt
-          chmod a+x $dest/detekt
-          echo $dest >> $GITHUB_PATH
+            --output $dest/detekt-cli.jar
+          echo "DETEKT_JAR=$dest/detekt-cli.jar" >> "$GITHUB_ENV"
 
       - name: Run Detekt
         continue-on-error: true
         run: |
-          detekt --input ${{ github.workspace }} --report sarif:${{ github.workspace }}/detekt.sarif.json
+          java -jar "$DETEKT_JAR" --input ${{ github.workspace }} --report sarif:${{ github.workspace }}/detekt.sarif.json
 
       - name: Make artifact location URIs relative
         continue-on-error: true
