@@ -77,10 +77,13 @@ object BundleStatsTask : Task {
         val lobContext = if (analyzerOptions.moduleMappingsPath.isNotBlank()) {
             kotlin.runCatching {
                 val path = analyzerOptions.getPath(analyzerOptions.moduleMappingsPath)
+                val effectiveApkFile = installTimeDataHolder?.primaryFile?.file
+                    ?: dataHolder.primaryFile.file
                 LobContext.load(
                     path = path,
                     isAab = !runApkProcessors,
                     appPackagePrefixes = analyzerOptions.appPackagePrefix,
+                    apkPath = effectiveApkFile.absolutePath,
                 )
             }.onFailure {
                 Printer.log("Failed to load LOB mappings: ${it.message}")

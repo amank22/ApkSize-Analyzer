@@ -2,11 +2,17 @@ package com.gi.apksize.models
 
 import com.gi.apksize.utils.ApkSizeHelpers
 import com.gi.apksize.utils.Printer
+import com.google.devrel.gmscore.tools.apk.arsc.BinaryResourceFile
+import com.google.devrel.gmscore.tools.apk.arsc.BinaryResourceValue
+import com.google.devrel.gmscore.tools.apk.arsc.PackageChunk
+import com.google.devrel.gmscore.tools.apk.arsc.ResourceTableChunk
+import com.google.devrel.gmscore.tools.apk.arsc.TypeChunk
 import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
 import java.io.File
 import java.io.InputStreamReader
 import java.util.concurrent.ConcurrentLinkedQueue
+import java.util.zip.ZipFile
 import java.util.zip.ZipInputStream
 import kotlin.math.roundToLong
 
@@ -25,6 +31,8 @@ class LobContext private constructor(
     private val moduleToFu: Map<Int, String>,
     /** Negative-index → FU name lookup (from resource-mapping.json `fuIndex` field). */
     private val fuIndex: Map<Int, String>,
+    /** Shortened APK path → original source path (from AAPT2 `--shorten-resource-paths`). */
+    private val resourcePathMap: Map<String, String>,
     private val isAab: Boolean,
     private val appPackagePrefixes: List<String>,
 ) {
@@ -131,7 +139,12 @@ class LobContext private constructor(
                     unmatchedFileSize += file.sizeInBytes
                     unmatchedFileCount++
                     unmatchedFileDetailsList.add(
-                        UnmatchedFileDetail(file.name, file.sizeInBytes, category)
+                        UnmatchedFileDetail(
+                            name = file.name,
+                            sizeInBytes = file.sizeInBytes,
+                            category = category,
+                            originalName = resolveOriginalPath(file.name),
+                        )
                     )
                 }
             }
@@ -378,8 +391,21 @@ class LobContext private constructor(
     }
 
     /**
+     * Resolve the original source path for a potentially shortened APK resource path.
+     * Returns null if the path is not in the shortening map.
+     */
+    fun resolveOriginalPath(name: String): String? {
+        if (resourcePathMap.isEmpty()) return null
+        resourcePathMap[name]?.let { return it }
+        // APK paths may lack a leading qualifier that the map uses, or vice versa
+        return null
+    }
+
+    /**
      * Try to match a file name against the resource mapping.
      * For APK mode, paths lack the `base/` prefix so we try prepending it.
+     * When a resource path shortening map is available, the shortened APK path
+     * is first resolved back to its original source path before matching.
      */
     private fun resolveFileMapping(name: String): List<Int>? {
         val candidates = linkedSetOf<String>()
@@ -390,6 +416,17 @@ class LobContext private constructor(
         val parentDrawableName = normalizeAapt2AnimatedFramePath(name)
         candidates += parentDrawableName
         candidates += normalizeCompiledResourcePath(parentDrawableName)
+
+        // If resource path shortening is active, resolve the shortened APK path
+        // back to the original source path and add those as candidates too.
+        val originalPath = resolveOriginalPath(name)
+        if (originalPath != null) {
+            candidates += originalPath
+            candidates += normalizeCompiledResourcePath(originalPath)
+            val parentOriginal = normalizeAapt2AnimatedFramePath(originalPath)
+            candidates += parentOriginal
+            candidates += normalizeCompiledResourcePath(parentOriginal)
+        }
 
         for (candidate in candidates) {
             val mapping = resolveFileMappingCandidate(candidate)
@@ -526,6 +563,7 @@ class LobContext private constructor(
         private const val METADATA_FILE = "module-metadata.json"
         private const val RESOURCE_MAPPING_FILE = "resource-mapping.json"
         private const val PACKAGE_MAPPING_FILE = "package-mapping.json"
+        private const val SHRUNK_RESOURCES_FILE = "shrunk-resources.ap_"
         private const val ANDROID_PLATFORM_LOB = "android_platform"
         private const val THIRD_PARTY_LOB = "thirdparty"
         private val IGNORED_LOB_FILES = setOf("resources.arsc")
@@ -586,11 +624,15 @@ class LobContext private constructor(
          * @param path Path to a directory containing the 3 JSON files, or a .zip file containing them.
          * @param isAab Whether the analysis is for an AAB (affects path normalization for file matching).
          * @param appPackagePrefixes App-owned package prefixes from analyzer config.
+         * @param apkPath Path to the APK being analyzed. Used together with a `shrunk-resources.ap_`
+         *   file (if present alongside the mappings) to build a reverse map from AAPT2 shortened
+         *   resource paths back to their original names.
          */
         fun load(
             path: String,
             isAab: Boolean,
             appPackagePrefixes: List<String> = emptyList(),
+            apkPath: String? = null,
         ): LobContext {
             val file = File(path).canonicalFile
             Printer.log("Loading LOB mappings from: ${file.path}")
@@ -661,6 +703,9 @@ class LobContext private constructor(
                 }
             }
 
+            // Build resource path shortening reverse map from shrunk-resources.ap_ + APK
+            val resourcePathMap = buildResourcePathMap(file, apkPath)
+
             val normalizedAppPackagePrefixes = appPackagePrefixes
                 .map { it.trim() }
                 .filter { it.isNotEmpty() }
@@ -671,9 +716,144 @@ class LobContext private constructor(
                 packageMapping = packageMapping,
                 moduleToFu = moduleToFu,
                 fuIndex = fuIndex,
+                resourcePathMap = resourcePathMap,
                 isAab = isAab,
                 appPackagePrefixes = normalizedAppPackagePrefixes,
             )
+        }
+
+        /**
+         * Attempt to build a shortened-to-original resource path map by correlating
+         * `resources.arsc` entries from the shrunk `.ap_` (original paths) and the
+         * APK (shortened paths) by resource ID.
+         *
+         * Returns an empty map when the shrunk `.ap_` file is not available, the APK
+         * path is not provided, or parsing fails.
+         */
+        private fun buildResourcePathMap(mappingsPath: File, apkPath: String?): Map<String, String> {
+            if (apkPath.isNullOrBlank()) return emptyMap()
+
+            val shrunkApFile: File? = if (mappingsPath.isDirectory) {
+                val f = File(mappingsPath, SHRUNK_RESOURCES_FILE)
+                if (f.exists()) f else null
+            } else if (mappingsPath.name.endsWith(".zip", ignoreCase = true)) {
+                extractShrunkApFromZip(mappingsPath)
+            } else null
+
+            if (shrunkApFile == null) return emptyMap()
+
+            val apkFile = File(apkPath)
+            if (!apkFile.exists()) {
+                Printer.log("APK file not found for arsc correlation: $apkPath")
+                return emptyMap()
+            }
+
+            return try {
+                val originalPaths = extractResourceFilePathsFromArsc(shrunkApFile)
+                val shortenedPaths = extractResourceFilePathsFromArsc(apkFile)
+                val result = correlateByResourceId(originalPaths, shortenedPaths)
+                if (result.isNotEmpty()) {
+                    Printer.log("Built resource path shortening map from arsc: ${result.size} entries")
+                }
+                result
+            } catch (e: Exception) {
+                Printer.log("Failed to build resource path map from arsc: ${e.message}")
+                emptyMap()
+            } finally {
+                if (shrunkApFile.name.startsWith("apksize-shrunk-")) {
+                    shrunkApFile.delete()
+                }
+            }
+        }
+
+        /**
+         * Extract a temporary copy of `shrunk-resources.ap_` from a mappings zip file.
+         * Returns a temp file (caller must delete), or null if not found.
+         */
+        private fun extractShrunkApFromZip(zipFile: File): File? {
+            ZipInputStream(zipFile.inputStream().buffered()).use { zis ->
+                var entry = zis.nextEntry
+                while (entry != null) {
+                    val simpleName = entry.name.substringAfterLast("/")
+                    if (simpleName == SHRUNK_RESOURCES_FILE) {
+                        val tempFile = File.createTempFile("apksize-shrunk-", ".ap_")
+                        tempFile.outputStream().buffered().use { out -> zis.copyTo(out) }
+                        return tempFile
+                    }
+                    zis.closeEntry()
+                    entry = zis.nextEntry
+                }
+            }
+            return null
+        }
+
+        /**
+         * Parse `resources.arsc` from a ZIP file (APK or `.ap_`) and extract a map
+         * of composite resource ID to file paths for all file-type resource entries.
+         *
+         * Each resource ID can have multiple file paths — one per configuration
+         * variant (e.g. default, hdpi, night). The lists are kept in TypeChunk
+         * iteration order so that the two maps can be zipped during correlation.
+         *
+         * Resource ID = `(packageId << 24) | (typeId << 16) | entryId`
+         */
+        private fun extractResourceFilePathsFromArsc(zipPath: File): Map<Int, MutableList<String>> {
+            val result = mutableMapOf<Int, MutableList<String>>()
+            ZipFile(zipPath).use { zip ->
+                val arscEntry = zip.getEntry("resources.arsc") ?: return emptyMap()
+                val arscBytes = zip.getInputStream(arscEntry).use { it.readBytes() }
+                val brf = BinaryResourceFile(arscBytes)
+                for (chunk in brf.chunks) {
+                    if (chunk !is ResourceTableChunk) continue
+                    val stringPool = chunk.stringPool
+                    for (pkg in chunk.packages) {
+                        val packageId = pkg.id
+                        for (typeChunk in pkg.typeChunks) {
+                            val typeId = typeChunk.id
+                            for ((entryIndex, entry) in typeChunk.entries) {
+                                if (entry.isComplex) continue
+                                val value = entry.value() ?: continue
+                                if (value.type() != BinaryResourceValue.Type.STRING) continue
+                                val stringIndex = value.data()
+                                if (stringIndex < 0) continue
+                                val filePath = try {
+                                    stringPool.getString(stringIndex)
+                                } catch (e: Exception) {
+                                    continue
+                                }
+                                if (!filePath.startsWith("res/")) continue
+                                val resId = (packageId shl 24) or (typeId shl 16) or entryIndex
+                                result.getOrPut(resId) { mutableListOf() }.add(filePath)
+                            }
+                        }
+                    }
+                }
+            }
+            return result
+        }
+
+        /**
+         * Correlate two resource-ID-to-paths maps to produce a shortened→original mapping.
+         * Each resource ID may have multiple paths (one per config variant); we zip
+         * the lists pairwise so that e.g. the hdpi entry in both maps lines up.
+         * Only includes entries where the paths differ (i.e. an actual rename occurred).
+         */
+        private fun correlateByResourceId(
+            originalPaths: Map<Int, List<String>>,
+            shortenedPaths: Map<Int, List<String>>,
+        ): Map<String, String> {
+            val result = mutableMapOf<String, String>()
+            for ((resId, shortenedList) in shortenedPaths) {
+                val originalList = originalPaths[resId] ?: continue
+                for (i in 0 until minOf(shortenedList.size, originalList.size)) {
+                    val shortened = shortenedList[i]
+                    val original = originalList[i]
+                    if (shortened != original) {
+                        result[shortened] = original
+                    }
+                }
+            }
+            return result
         }
 
         private fun loadFromDirectory(dir: File): Map<String, String> {
@@ -693,7 +873,6 @@ class LobContext private constructor(
             ZipInputStream(zipFile.inputStream().buffered()).use { zis ->
                 var entry = zis.nextEntry
                 while (entry != null) {
-                    // Match by file name (ignore directory structure in zip)
                     val simpleName = entry.name.substringAfterLast("/")
                     if (simpleName in targetNames) {
                         result[simpleName] = InputStreamReader(zis, Charsets.UTF_8).readText()
