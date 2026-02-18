@@ -1,0 +1,29 @@
+{
+    "outputFolderPath": "/Users/mmt10741/IdeaProjects/ApkSize-Analyzer/samples/test/outputs-apk-lob",
+    "useInstallTimeApkForAabAnalysis": true,
+    "bundletoolJarPath": "bundletool.jar",
+    "topFilesImagesSizeLimiter": 5000,
+    "filteredFilesSizeLimiter": 5000,
+    "filesListMaxCount": 50,
+    "dexPackagesMinDepth": 2,
+    "appPackagesMaxCount": 50,
+    "dexPackagesMaxCount": 50,
+    "dexPackagesSizeLimiter": 5000,
+    "inputFilePath": "/Users/mmt10741/IdeaProjects/ApkSize-Analyzer/samples/test/apk/mmt.apk",
+    "appName": "MakeMyTrip",
+    "appPackagePrefix": [
+      "com.makemytrip",
+      "com.mmt",
+      "com.gommt",
+      "com.goibibo",
+      "com.tripmoney"
+    ],
+    "appModulePrefixes": [
+      "com.makemytrip",
+      "com.mmt",
+      "com.gommt",
+      "com.goibibo",
+      "com.tripmoney"
+    ],
+    "moduleMappingsPath": "/Users/mmt10741/StudioProjects/APP-android/mobile/build/reports"
+  }

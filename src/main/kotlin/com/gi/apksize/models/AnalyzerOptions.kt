@@ -216,17 +216,12 @@ data class AnalyzerOptions(
     }
 
     fun getPath(path: String): String {
-        return if (arePathsAbsolute) {
-            path
+        val file = File(path)
+        return if (arePathsAbsolute || file.isAbsolute) {
+            file.canonicalPath
         } else {
-            val currentPath = System.getProperty("user.dir")
-            val separator = File.separator
-            val updatedPath = if (!path.startsWith(separator)) {
-                "$separator$path"
-            } else {
-                path
-            }
-            currentPath + updatedPath
+            val baseDir = File(System.getProperty("user.dir"))
+            baseDir.resolve(path).canonicalPath
         }
     }
 
