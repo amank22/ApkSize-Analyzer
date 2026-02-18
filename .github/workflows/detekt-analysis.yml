@@ -49,33 +49,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Get Detekt download URL
-        id: detekt_info
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          DETEKT_DOWNLOAD_URL=$( gh api graphql --field tagName=$DETEKT_RELEASE_TAG --raw-field query='
-            query getReleaseAssetDownloadUrl($tagName: String!) {
-              repository(name: "detekt", owner: "detekt") {
-                release(tagName: $tagName) {
-                  releaseAssets(name: "detekt", first: 1) {
-                    nodes {
-                      downloadUrl
-                    }
-                  }
-                }
-              }
-            }
-          ' | jq --raw-output '.data.repository.release.releaseAssets.nodes[0].downloadUrl' )
-          echo "download_url=$DETEKT_DOWNLOAD_URL" >> "$GITHUB_OUTPUT"
-
       - name: Setup Detekt
         run: |
           dest=$( mktemp -d )
           curl --request GET \
-            --url ${{ steps.detekt_info.outputs.download_url }} \
+            --url "https://github.com/detekt/detekt/releases/download/${DETEKT_RELEASE_TAG}/detekt" \
             --silent \
             --location \
+            --fail \
             --output $dest/detekt
           chmod a+x $dest/detekt
           echo $dest >> $GITHUB_PATH
