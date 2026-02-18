@@ -592,10 +592,10 @@ class LobContext private constructor(
             isAab: Boolean,
             appPackagePrefixes: List<String> = emptyList(),
         ): LobContext {
-            Printer.log("Loading LOB mappings from: $path")
-            val file = File(path)
+            val file = File(path).canonicalFile
+            Printer.log("Loading LOB mappings from: ${file.path}")
             if (!file.exists()) {
-                throw IllegalArgumentException("Module mappings path does not exist: $path")
+                throw IllegalArgumentException("Module mappings path does not exist: ${file.path}")
             }
 
             val jsonContents: Map<String, String> = if (file.isDirectory) {
