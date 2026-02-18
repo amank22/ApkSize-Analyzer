@@ -63,6 +63,11 @@
   "methods":[{"name":"<init>","parameterTypes":[] }]
 },
 {
+  "name":"com.gi.apksize.models.DexPackageTreeModel",
+  "allDeclaredFields":true,
+  "methods":[{"name":"<init>","parameterTypes":[] }]
+},
+{
   "name":"com.gi.apksize.models.EstimatedDeviceSize",
   "allDeclaredFields":true,
   "methods":[{"name":"<init>","parameterTypes":[] }]
@@ -75,6 +80,76 @@
 {
   "name":"com.gi.apksize.models.InputFileType",
   "allDeclaredFields":true
+},
+{
+  "name":"com.gi.apksize.models.LobAnalysisResult",
+  "allDeclaredFields":true,
+  "methods":[{"name":"<init>","parameterTypes":[] }]
+},
+{
+  "name":"com.gi.apksize.models.LobSizeBreakdown",
+  "allDeclaredFields":true,
+  "methods":[{"name":"<init>","parameterTypes":[] }]
+},
+{
+  "name":"com.gi.apksize.models.UnmatchedInfo",
+  "allDeclaredFields":true,
+  "methods":[{"name":"<init>","parameterTypes":[] }]
+},
+{
+  "name":"com.gi.apksize.models.LobSummary",
+  "allDeclaredFields":true,
+  "methods":[{"name":"<init>","parameterTypes":[] }]
+},
+{
+  "name":"com.gi.apksize.models.UnmatchedDetails",
+  "allDeclaredFields":true,
+  "methods":[{"name":"<init>","parameterTypes":[] }]
+},
+{
+  "name":"com.gi.apksize.models.UnmatchedDetailsSummary",
+  "allDeclaredFields":true,
+  "methods":[{"name":"<init>","parameterTypes":[] }]
+},
+{
+  "name":"com.gi.apksize.models.UnmatchedFileDetail",
+  "allDeclaredFields":true,
+  "methods":[{"name":"<init>","parameterTypes":[] }]
+},
+{
+  "name":"com.gi.apksize.models.UnmatchedDexDetail",
+  "allDeclaredFields":true,
+  "methods":[{"name":"<init>","parameterTypes":[] }]
+},
+{
+  "name":"com.gi.apksize.models.AttributedDetails",
+  "allDeclaredFields":true,
+  "methods":[{"name":"<init>","parameterTypes":[] }]
+},
+{
+  "name":"com.gi.apksize.models.LobAttributedDetail",
+  "allDeclaredFields":true,
+  "methods":[{"name":"<init>","parameterTypes":[] }]
+},
+{
+  "name":"com.gi.apksize.models.AttributedFileDetail",
+  "allDeclaredFields":true,
+  "methods":[{"name":"<init>","parameterTypes":[] }]
+},
+{
+  "name":"com.gi.apksize.models.AttributedDexDetail",
+  "allDeclaredFields":true,
+  "methods":[{"name":"<init>","parameterTypes":[] }]
+},
+{
+  "name":"com.gi.apksize.models.DexOverheadDetails",
+  "allDeclaredFields":true,
+  "methods":[{"name":"<init>","parameterTypes":[] }]
+},
+{
+  "name":"com.gi.apksize.models.DexFileEntry",
+  "allDeclaredFields":true,
+  "methods":[{"name":"<init>","parameterTypes":[] }]
 },
 {
   "name":"com.gi.apksize.models.ModuleMetadata",
@@ -98,6 +173,10 @@
 },
 {
   "name":"java.util.HashMap",
+  "methods":[{"name":"<init>","parameterTypes":[] }]
+},
+{
+  "name":"java.util.LinkedHashMap",
   "methods":[{"name":"<init>","parameterTypes":[] }]
 },
 {

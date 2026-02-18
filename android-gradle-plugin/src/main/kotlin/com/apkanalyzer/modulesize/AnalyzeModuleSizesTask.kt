@@ -536,8 +536,13 @@ open class AnalyzeModuleSizesTask : DefaultTask() {
 
         // ── Write resource mapping report ────────────────────────────────
         if (rawResourceMapping != null) {
-            writeResourceMappingReport(config, gson, rawResourceMapping!!, moduleIndexMap, totalMappedFiles)
+            writeResourceMappingReport(
+                config, gson, rawResourceMapping!!, moduleIndexMap, totalMappedFiles
+            )
         }
+
+        // ── Copy shrunk resources .ap_ (for AAPT2 path-shortening reverse map) ──
+        copyShrunkResourcesAp(config)
 
         // ── Write package mapping report ─────────────────────────────────
         if (analysisModules != null) {
@@ -684,6 +689,34 @@ open class AnalyzeModuleSizesTask : DefaultTask() {
         moduleInfo.warnings.addAll(classResult.warnings)
 
         moduleInfo.nativeLibs.addAll(NativeLibExtractor.extractNativeLibsFromLocalModule(projectDir, config.variant))
+    }
+
+    /**
+     * Locate the pre-optimization shrunk resources `.ap_` from AGP intermediates
+     * (`shrunk_resources_binary_format/<variant>/.../*.ap_`) and copy it to the
+     * reports directory as `shrunk-resources.ap_`. The CLI uses this to build a
+     * reverse map from AAPT2 shortened paths back to original resource paths.
+     */
+    private fun copyShrunkResourcesAp(config: ModuleSizeAnalysisExtension) {
+        val variantNames = VariantUtils.splitVariant(config.variant)
+        val intermediatesDir = File(project.projectDir, "build/intermediates/shrunk_resources_binary_format")
+
+        val apFile = variantNames.firstNotNullOfOrNull { v ->
+            val variantDir = File(intermediatesDir, v)
+            if (!variantDir.exists()) return@firstNotNullOfOrNull null
+            variantDir.walkTopDown().maxDepth(3).firstOrNull { it.isFile && it.name.endsWith(".ap_") }
+        }
+
+        if (apFile == null) {
+            logger.lifecycle("  Shrunk resources .ap_ not found (resource shrinking may be disabled)")
+            return
+        }
+
+        val reportsDir = config.resourceMappingFile!!.parentFile
+        reportsDir.mkdirs()
+        val dest = File(reportsDir, "shrunk-resources.ap_")
+        apFile.copyTo(dest, overwrite = true)
+        logger.lifecycle("  Shrunk resources : ${dest.absolutePath} (${apFile.length() / 1024} KB)")
     }
 
     // ── Report writers ───────────────────────────────────────────────────

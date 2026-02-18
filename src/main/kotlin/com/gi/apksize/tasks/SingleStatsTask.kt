@@ -29,6 +29,7 @@ object SingleStatsTask : Task {
                     path = path,
                     isAab = false,
                     appPackagePrefixes = analyzerOptions.appPackagePrefix,
+                    apkPath = dataHolder.primaryFile.file.absolutePath,
                 )
             }.onFailure {
                 Printer.log("Failed to load LOB mappings: ${it.message}")

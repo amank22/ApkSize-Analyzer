@@ -60,11 +60,16 @@ data class LobSummary(
 
 /**
  * Detailed info about a single unmatched file (not found in resource-mapping).
+ *
+ * @property originalName When AAPT2 resource path shortening is active, this holds the
+ *   pre-shortening source path (e.g. `res/drawable-xhdpi/hotel_icon.webp`). Null when
+ *   the file was not renamed or no shortening map is available.
  */
 data class UnmatchedFileDetail(
     val name: String,
     val sizeInBytes: Long,
     val category: String,
+    val originalName: String? = null,
 )
 
 /**
