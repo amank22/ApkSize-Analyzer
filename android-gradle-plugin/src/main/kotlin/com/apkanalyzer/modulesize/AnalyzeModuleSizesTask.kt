@@ -693,7 +693,7 @@ open class AnalyzeModuleSizesTask : DefaultTask() {
 
     /**
      * Locate the pre-optimization shrunk resources `.ap_` from AGP intermediates
-     * (`shrunk_resources_binary_format/<variant>/.../*.ap_`) and copy it to the
+     * (`shrunk_resources_binary_format/<variant>/.../.ap_`) and copy it to the
      * reports directory as `shrunk-resources.ap_`. The CLI uses this to build a
      * reverse map from AAPT2 shortened paths back to original resource paths.
      */
