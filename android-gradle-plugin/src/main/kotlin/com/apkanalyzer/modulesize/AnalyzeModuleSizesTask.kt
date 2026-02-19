@@ -701,14 +701,25 @@ open class AnalyzeModuleSizesTask : DefaultTask() {
         val variantNames = VariantUtils.splitVariant(config.variant)
         val intermediatesDir = File(project.projectDir, "build/intermediates/shrunk_resources_binary_format")
 
+        if (!intermediatesDir.exists()) {
+            logger.lifecycle("  Shrunk resources dir not found: ${intermediatesDir.absolutePath}")
+            logger.lifecycle("  (resource shrinking may be disabled or build not yet complete)")
+            return
+        }
+
         val apFile = variantNames.firstNotNullOfOrNull { v ->
             val variantDir = File(intermediatesDir, v)
             if (!variantDir.exists()) return@firstNotNullOfOrNull null
-            variantDir.walkTopDown().maxDepth(3).firstOrNull { it.isFile && it.name.endsWith(".ap_") }
+            variantDir.walkTopDown().maxDepth(5).firstOrNull { it.isFile && it.name.endsWith(".ap_") }
         }
+            ?: intermediatesDir.walkTopDown().maxDepth(6)
+                .firstOrNull { it.isFile && it.name.endsWith(".ap_") }
 
         if (apFile == null) {
+            val dirs = intermediatesDir.listFiles()?.map { it.name } ?: emptyList()
             logger.lifecycle("  Shrunk resources .ap_ not found (resource shrinking may be disabled)")
+            logger.lifecycle("  Searched variants: $variantNames")
+            logger.lifecycle("  Available dirs   : $dirs")
             return
         }
 
