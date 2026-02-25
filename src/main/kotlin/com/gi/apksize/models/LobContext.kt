@@ -35,7 +35,15 @@ class LobContext private constructor(
     private val resourcePathMap: Map<String, String>,
     private val isAab: Boolean,
     private val appPackagePrefixes: List<String>,
+    /** Proportional splits: file path → split config (from proportional-splits.json). */
+    private val fileSplits: Map<String, FileSplitConfig> = emptyMap(),
 ) {
+    /** Proportional split configuration for a single file (e.g. index.android.bundle). */
+    data class FileSplitConfig(
+        val sourceLob: String,
+        val distribution: Map<String, Long>,
+        val totalSourceBytes: Long,
+    )
     /** Simple tuple for collected file data */
     data class FileEntry(val name: String, val sizeInBytes: Long, val fileType: String)
 
@@ -111,6 +119,32 @@ class LobContext private constructor(
                 continue
             }
             totalFileSize += file.sizeInBytes
+
+            // Proportional split: distribute a single file across multiple LOBs by ratio.
+            // Used for index.android.bundle where the RN bundle analyzer provides per-team sizes.
+            val splitConfig = resolveFileSplit(file.name)
+            if (splitConfig != null && splitConfig.totalSourceBytes > 0) {
+                var distributed = 0L
+                val sortedEntries = splitConfig.distribution.entries.sortedByDescending { it.value }
+                for ((idx, entry) in sortedEntries.withIndex()) {
+                    val (fu, bytes) = entry
+                    // Use floor (toLong) for all entries except the last to guarantee the sum
+                    // does not exceed file.sizeInBytes. The last entry absorbs the remainder.
+                    val share = if (idx == sortedEntries.lastIndex) {
+                        file.sizeInBytes - distributed
+                    } else {
+                        (file.sizeInBytes.toDouble() * bytes / splitConfig.totalSourceBytes).toLong()
+                    }
+                    distributed += share
+                    fuFileSizes.getOrPut(fu) { mutableMapOf() }
+                        .merge("rnBundle", share) { a, b -> a + b }
+                    val pct = String.format("%.2f", bytes.toDouble() / splitConfig.totalSourceBytes * 100.0)
+                    attributedFilesByLob.getOrPut(fu) { mutableListOf() }
+                        .add(AttributedFileDetail("${file.name} [rnBundle: $pct%]", share, "rnBundle"))
+                }
+                continue
+            }
+
             val category = categorize(file.fileType)
             val moduleIndices = resolveFileMapping(file.name)
             if (moduleIndices != null && moduleIndices.isNotEmpty()) {
@@ -125,14 +159,14 @@ class LobContext private constructor(
                 fuFileSizes.getOrPut(fuName) { mutableMapOf() }
                     .merge(category, file.sizeInBytes) { a, b -> a + b }
                 attributedFilesByLob.getOrPut(fuName) { mutableListOf() }
-                    .add(AttributedFileDetail(file.name, file.sizeInBytes, category))
+                    .add(AttributedFileDetail(file.name, file.sizeInBytes, category, originalName = resolveOriginalPath(file.name)))
             } else {
                 val fallbackLob = resolveFallbackLobForFile(file.name, category)
                 if (fallbackLob != null) {
                     fuFileSizes.getOrPut(fallbackLob) { mutableMapOf() }
                         .merge(category, file.sizeInBytes) { a, b -> a + b }
                     attributedFilesByLob.getOrPut(fallbackLob) { mutableListOf() }
-                        .add(AttributedFileDetail(file.name, file.sizeInBytes, category))
+                        .add(AttributedFileDetail(file.name, file.sizeInBytes, category, originalName = resolveOriginalPath(file.name)))
                     autoAttributedFileCountByLob.merge(fallbackLob, 1) { a, b -> a + b }
                     autoAttributedFileSizeByLob.merge(fallbackLob, file.sizeInBytes) { a, b -> a + b }
                 } else {
@@ -321,14 +355,16 @@ class LobContext private constructor(
             val resources = fileSizes?.get("resources") ?: 0L
             val assets = fileSizes?.get("assets") ?: 0L
             val nativeLibs = fileSizes?.get("nativeLibs") ?: 0L
+            val rnBundle = fileSizes?.get("rnBundle") ?: 0L
             val other = fileSizes?.get("other") ?: 0L
             fu to LobSizeBreakdown(
                 code = code,
                 resources = resources,
                 assets = assets,
                 nativeLibs = nativeLibs,
+                rnBundle = rnBundle,
                 other = other,
-                total = code + resources + assets + nativeLibs + other,
+                total = code + resources + assets + nativeLibs + rnBundle + other,
             )
         }.sortedByDescending { it.second.total }
             .associate { it.first to it.second }  // LinkedHashMap preserves insertion order
@@ -340,6 +376,7 @@ class LobContext private constructor(
             resources = allBreakdowns.sumOf { it.resources },
             assets = allBreakdowns.sumOf { it.assets },
             nativeLibs = allBreakdowns.sumOf { it.nativeLibs },
+            rnBundle = allBreakdowns.sumOf { it.rnBundle },
             other = allBreakdowns.sumOf { it.other },
             total = allBreakdowns.sumOf { it.total },
         )
@@ -443,6 +480,17 @@ class LobContext private constructor(
             // APK paths lack module prefix — try prepending "base/"
             resourceMapping["base/$path"]?.let { return it }
         }
+        return null
+    }
+
+    /**
+     * Check if a file has a proportional split config.
+     * Tries both the raw name and a `base/`-prefixed variant for APK compatibility.
+     */
+    private fun resolveFileSplit(name: String): FileSplitConfig? {
+        if (fileSplits.isEmpty()) return null
+        fileSplits[name]?.let { return it }
+        if (!isAab) fileSplits["base/$name"]?.let { return it }
         return null
     }
 
@@ -563,6 +611,7 @@ class LobContext private constructor(
         private const val METADATA_FILE = "module-metadata.json"
         private const val RESOURCE_MAPPING_FILE = "resource-mapping.json"
         private const val PACKAGE_MAPPING_FILE = "package-mapping.json"
+        private const val PROPORTIONAL_SPLITS_FILE = "proportional-splits.json"
         private const val SHRUNK_RESOURCES_FILE = "shrunk-resources.ap_"
         private const val ANDROID_PLATFORM_LOB = "android_platform"
         private const val THIRD_PARTY_LOB = "thirdparty"
@@ -706,6 +755,9 @@ class LobContext private constructor(
             // Build resource path shortening reverse map from shrunk-resources.ap_ + APK
             val resourcePathMap = buildResourcePathMap(file, apkPath)
 
+            // Parse optional proportional-splits.json for RN bundle distribution
+            val fileSplits = parseProportionalSplits(jsonContents[PROPORTIONAL_SPLITS_FILE])
+
             val normalizedAppPackagePrefixes = appPackagePrefixes
                 .map { it.trim() }
                 .filter { it.isNotEmpty() }
@@ -719,6 +771,7 @@ class LobContext private constructor(
                 resourcePathMap = resourcePathMap,
                 isAab = isAab,
                 appPackagePrefixes = normalizedAppPackagePrefixes,
+                fileSplits = fileSplits,
             )
         }
 
@@ -858,7 +911,7 @@ class LobContext private constructor(
 
         private fun loadFromDirectory(dir: File): Map<String, String> {
             val result = mutableMapOf<String, String>()
-            for (name in listOf(METADATA_FILE, RESOURCE_MAPPING_FILE, PACKAGE_MAPPING_FILE)) {
+            for (name in listOf(METADATA_FILE, RESOURCE_MAPPING_FILE, PACKAGE_MAPPING_FILE, PROPORTIONAL_SPLITS_FILE)) {
                 val f = File(dir, name)
                 if (f.exists() && f.canRead()) {
                     result[name] = f.readText()
@@ -868,7 +921,7 @@ class LobContext private constructor(
         }
 
         private fun loadFromZip(zipFile: File): Map<String, String> {
-            val targetNames = setOf(METADATA_FILE, RESOURCE_MAPPING_FILE, PACKAGE_MAPPING_FILE)
+            val targetNames = setOf(METADATA_FILE, RESOURCE_MAPPING_FILE, PACKAGE_MAPPING_FILE, PROPORTIONAL_SPLITS_FILE)
             val result = mutableMapOf<String, String>()
             ZipInputStream(zipFile.inputStream().buffered()).use { zis ->
                 var entry = zis.nextEntry
@@ -882,6 +935,37 @@ class LobContext private constructor(
                 }
             }
             return result
+        }
+
+        /**
+         * Parse proportional-splits.json content into a file path → split config map.
+         * Returns an empty map when the content is null or unparseable.
+         */
+        @Suppress("UNCHECKED_CAST")
+        private fun parseProportionalSplits(jsonContent: String?): Map<String, FileSplitConfig> {
+            if (jsonContent.isNullOrBlank()) return emptyMap()
+            return try {
+                val gson = Gson()
+                val type = object : com.google.gson.reflect.TypeToken<Map<String, Any>>() {}.type
+                val wrapper: Map<String, Any> = gson.fromJson(jsonContent, type)
+                val rawSplits = wrapper["fileSplits"] as? Map<String, Map<String, Any>> ?: return emptyMap()
+
+                val result = mutableMapOf<String, FileSplitConfig>()
+                for ((filePath, splitData) in rawSplits) {
+                    val sourceLob = splitData["sourceLob"] as? String ?: "reactnative"
+                    val rawDist = splitData["distribution"] as? Map<String, Number> ?: continue
+                    val distribution = rawDist.mapValues { (_, v) -> v.toLong() }
+                    val totalSourceBytes = (splitData["totalSourceBytes"] as? Number)?.toLong() ?: continue
+                    result[filePath] = FileSplitConfig(sourceLob, distribution, totalSourceBytes)
+                }
+                if (result.isNotEmpty()) {
+                    Printer.log("Loaded proportional splits: ${result.size} files")
+                }
+                result
+            } catch (e: Exception) {
+                Printer.log("Failed to parse proportional-splits.json: ${e.message}")
+                emptyMap()
+            }
         }
     }
 }

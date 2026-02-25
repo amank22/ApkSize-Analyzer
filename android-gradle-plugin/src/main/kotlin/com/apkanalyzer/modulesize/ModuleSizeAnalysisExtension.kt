@@ -22,19 +22,6 @@ open class ModuleSizeAnalysisExtension {
     var variant: String = "release"
 
     /**
-     * Glob patterns for modules to include.
-     * Matched against "group:artifact" (remote) or ":project-path" (local).
-     * Use "*" as wildcard. Default: include everything.
-     */
-    var includePatterns: List<String> = listOf("*")
-
-    /**
-     * Glob patterns for modules to exclude.
-     * Applied after [includePatterns].
-     */
-    var excludePatterns: List<String> = emptyList()
-
-    /**
      * Whether to include local project modules (dependencies declared as `project(":xyz")`).
      * When false, only remote (Maven/AAR/JAR) dependencies are analyzed.
      */
@@ -124,4 +111,34 @@ open class ModuleSizeAnalysisExtension {
      * Key = FU name, Value = list of directory paths (relative to app module project dir).
      */
     var resourceDirFUOverrides: Map<String, List<String>> = emptyMap()
+
+    // ─── React Native bundle analysis integration ────────────────────────
+
+    /**
+     * Path to the React Native bundle analysis JSON file (produced by the RN bundle analyzer).
+     * When set, the plugin reads per-team breakdowns from this file and:
+     *   - Re-attributes RN image resources to individual team LOBs (via [assetsByTeam])
+     *   - Generates proportional split data for `index.android.bundle` (via [teamBreakdown])
+     *
+     * When null or file doesn't exist, all RN artifacts stay under the existing "reactnative" FU.
+     */
+    var rnBundleAnalysisFile: File? = null
+
+    /**
+     * Optional explicit overrides mapping RN team names to FU names.
+     * Applied before auto-normalization. Useful for edge cases where the RN team name
+     * doesn't normalize cleanly to a matching FU name.
+     *
+     * Example:
+     * ```
+     * rnTeamToFuOverrides = mapOf(
+     *     "Payment Team" to "payments",
+     *     "Where2Go/Hubble" to "hubble",
+     * )
+     * ```
+     */
+    var rnTeamToFuOverrides: Map<String, String> = emptyMap()
+
+    /** Output file path for the proportional splits JSON (RN bundle → per-team split ratios). */
+    var proportionalSplitsFile: File? = null
 }

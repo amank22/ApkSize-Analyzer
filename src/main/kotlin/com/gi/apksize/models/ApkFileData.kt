@@ -10,6 +10,8 @@ data class ApkFileData(
     val fileType: ApkFileType,
     val simpleFileName: String,
     val moduleName: String? = null,
+    /** Raw shortened APK path when AAPT2 resource path shortening is active; null otherwise. */
+    val apkPath: String? = null,
 )
 
 data class ApkFileType(
