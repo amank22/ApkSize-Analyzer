@@ -48,8 +48,6 @@ moduleSizeAnalysis {
 |----------|------|---------|-------------|
 | `variant` | `String` | `"release"` | Build variant to analyze (e.g. `"release"`, `"standardRelease"`). |
 | `packageDepth` | `Int` | `3` | How many levels deep to group classes by package. E.g. depth 3 = `com.example.lib`, depth 4 = `com.example.lib.utils`. |
-| `includePatterns` | `List<String>` | `["*"]` | Glob patterns for modules to include. Matched against `"group:artifact"` (remote) or `":project-path"` (local). |
-| `excludePatterns` | `List<String>` | `[]` | Glob patterns for modules to exclude. Applied after `includePatterns`. |
 | `includeLocalModules` | `Boolean` | `true` | Whether to include local project modules (`:xyz` dependencies). When `false`, only remote Maven/AAR/JAR dependencies are analyzed. |
 | `enableModuleAnalysis` | `Boolean` | `true` | Enable the module analysis step (resources, classes, native libs per module). |
 | `enableResourceMapping` | `Boolean` | `true` | Enable the resource mapping step (file path to module mapping). |
@@ -82,8 +80,6 @@ You can override DSL properties from the command line without editing `build.gra
 ./gradlew :app:analyzeModuleSizes \
     -PmoduleSizeAnalysis.variant=standardRelease \
     -PmoduleSizeAnalysis.packageDepth=4 \
-    -PmoduleSizeAnalysis.includePatterns="com.example:*,:app-*" \
-    -PmoduleSizeAnalysis.excludePatterns="*test*" \
     -PmoduleSizeAnalysis.includeLocalModules=true \
     -PmoduleSizeAnalysis.enableModuleAnalysis=true \
     -PmoduleSizeAnalysis.enableResourceMapping=true \

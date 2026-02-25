@@ -29,6 +29,8 @@ data class LobSizeBreakdown(
     val assets: Long,
     /** Native libraries (lib/) size in bytes */
     val nativeLibs: Long,
+    /** RN JS bundle proportional share in bytes (from proportional-splits.json) */
+    val rnBundle: Long = 0,
     /** Other matched files size in bytes */
     val other: Long,
     /** Total size in bytes (sum of all categories) */
@@ -100,11 +102,16 @@ data class UnmatchedDetailsSummary(
 
 /**
  * A single file attributed to a LOB.
+ *
+ * @property originalName When AAPT2 resource path shortening is active, this holds the
+ *   pre-shortening source path (e.g. `res/drawable-xhdpi/hotel_icon.webp`). Null when
+ *   the file was not renamed or no shortening map is available.
  */
 data class AttributedFileDetail(
     val name: String,
     val sizeInBytes: Long,
     val category: String,
+    val originalName: String? = null,
 )
 
 /**

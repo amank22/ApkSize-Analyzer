@@ -306,7 +306,13 @@ object HtmlGenerator {
                 } +
                         p(classes = "title is-size-5 has-text-weight-light") {
                             apkFileData.simpleFileName
-                        } + p(classes = "subtitle has-text-danger") {
+                        } + if (!apkFileData.apkPath.isNullOrEmpty()) {
+                    listOf(p(classes = "is-size-7 has-text-grey") {
+                        apkFileData.apkPath
+                    })
+                } else {
+                    emptyList()
+                } + p(classes = "subtitle has-text-danger") {
                     humanReadableByteCountSI(apkFileData.sizeInBytes)
                 }
             }
@@ -436,6 +442,7 @@ object HtmlGenerator {
                                     th { "Resources" } +
                                     th { "Assets" } +
                                     th { "Native Libs" } +
+                                    th { "RN Bundle" } +
                                     th { "Other" } +
                                     th { "Total" } +
                                     th { "% of Attributed" }
@@ -452,6 +459,7 @@ object HtmlGenerator {
                                         td { humanReadableByteCountSI(breakdown.resources) } +
                                         td { humanReadableByteCountSI(breakdown.assets) } +
                                         td { humanReadableByteCountSI(breakdown.nativeLibs) } +
+                                        td { humanReadableByteCountSI(breakdown.rnBundle) } +
                                         td { humanReadableByteCountSI(breakdown.other) } +
                                         td { strong { humanReadableByteCountSI(breakdown.total) } } +
                                         td { "${String.format("%.2f", share)}%" }
@@ -465,6 +473,7 @@ object HtmlGenerator {
                                     td { strong { humanReadableByteCountSI(lob.total.resources) } } +
                                     td { strong { humanReadableByteCountSI(lob.total.assets) } } +
                                     td { strong { humanReadableByteCountSI(lob.total.nativeLibs) } } +
+                                    td { strong { humanReadableByteCountSI(lob.total.rnBundle) } } +
                                     td { strong { humanReadableByteCountSI(lob.total.other) } } +
                                     td { strong { humanReadableByteCountSI(lob.total.total) } } +
                                     td { strong("100.00%") }

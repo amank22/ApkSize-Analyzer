@@ -1,5 +1,6 @@
 package com.apkanalyzer.modulesize
 
+import com.google.gson.Gson
 import com.google.gson.GsonBuilder
 import org.gradle.api.DefaultTask
 import org.gradle.api.GradleException
@@ -40,8 +41,6 @@ open class AnalyzeModuleSizesTask : DefaultTask() {
         logger.lifecycle("=== Module Size Analysis ===")
         logger.lifecycle("  Variant           : ${config.variant}")
         logger.lifecycle("  Package Depth     : ${config.packageDepth}")
-        logger.lifecycle("  Include           : ${config.includePatterns}")
-        logger.lifecycle("  Exclude           : ${config.excludePatterns}")
         logger.lifecycle("  Local Modules     : ${config.includeLocalModules}")
         logger.lifecycle("  Module Analysis   : ${config.enableModuleAnalysis}")
         logger.lifecycle("  Resource Mapping  : ${config.enableResourceMapping}")
@@ -534,11 +533,19 @@ open class AnalyzeModuleSizesTask : DefaultTask() {
             logger.lifecycle("  Module analysis  : ${config.outputFile!!.absolutePath}")
         }
 
+        // ── Load RN bundle analysis (optional) ───────────────────────────
+        val rnAnalysis = loadRnBundleAnalysis(config)
+
         // ── Write resource mapping report ────────────────────────────────
         if (rawResourceMapping != null) {
             writeResourceMappingReport(
-                config, gson, rawResourceMapping!!, moduleIndexMap, totalMappedFiles
+                config, gson, rawResourceMapping!!, moduleIndexMap, totalMappedFiles, rnAnalysis
             )
+        }
+
+        // ── Write proportional splits for RN bundle ─────────────────────
+        if (rnAnalysis != null && rnAnalysis.teamBreakdown.isNotEmpty()) {
+            writeProportionalSplits(config, gson, rnAnalysis)
         }
 
         // ── Copy shrunk resources .ap_ (for AAPT2 path-shortening reverse map) ──
@@ -582,17 +589,12 @@ open class AnalyzeModuleSizesTask : DefaultTask() {
         if (config.resourceMappingFile == null) config.resourceMappingFile = File(buildDir, "reports/resource-mapping.json")
         if (config.metadataFile == null) config.metadataFile = File(buildDir, "reports/module-metadata.json")
         if (config.packageMappingFile == null) config.packageMappingFile = File(buildDir, "reports/package-mapping.json")
+        if (config.proportionalSplitsFile == null) config.proportionalSplitsFile = File(buildDir, "reports/proportional-splits.json")
     }
 
     private fun applyPropertyOverrides(config: ModuleSizeAnalysisExtension) {
         project.findProperty("moduleSizeAnalysis.variant")?.let { config.variant = it.toString() }
         project.findProperty("moduleSizeAnalysis.packageDepth")?.let { config.packageDepth = it.toString().toInt() }
-        project.findProperty("moduleSizeAnalysis.includePatterns")?.let {
-            config.includePatterns = it.toString().split(',').map { s -> s.trim() }
-        }
-        project.findProperty("moduleSizeAnalysis.excludePatterns")?.let {
-            config.excludePatterns = it.toString().split(',').map { s -> s.trim() }
-        }
         project.findProperty("moduleSizeAnalysis.outputFile")?.let { config.outputFile = project.file(it) }
         project.findProperty("moduleSizeAnalysis.includeLocalModules")?.let {
             config.includeLocalModules = it.toString().toBoolean()
@@ -730,6 +732,95 @@ open class AnalyzeModuleSizesTask : DefaultTask() {
         logger.lifecycle("  Shrunk resources : ${dest.absolutePath} (${apFile.length() / 1024} KB)")
     }
 
+    // ── RN bundle analysis helpers ─────────────────────────────────────
+
+    /**
+     * Attempt to load and parse the RN bundle analysis JSON.
+     * Returns null (with a log message) when the file is absent or unparseable.
+     */
+    private fun loadRnBundleAnalysis(config: ModuleSizeAnalysisExtension): RnBundleAnalysis? {
+        val file = config.rnBundleAnalysisFile ?: return null
+        if (!file.exists()) {
+            logger.lifecycle("  RN bundle analysis file not found: ${file.absolutePath} — skipping RN integration")
+            return null
+        }
+        return try {
+            val analysis = Gson().fromJson(file.readText(), RnBundleAnalysis::class.java)
+            logger.lifecycle("  RN bundle analysis loaded: ${analysis.teamBreakdown.size} teams, " +
+                    "${analysis.assetsByTeam.size} asset groups, " +
+                    "bundleSize=${analysis.bundleSizeBytes}")
+            analysis
+        } catch (e: Exception) {
+            logger.warn("  Failed to parse RN bundle analysis: ${e.message} — skipping RN integration")
+            null
+        }
+    }
+
+    /**
+     * Resolve an RN team/LOB name to a functional unit name.
+     * Priority: explicit override → auto-normalize → use as-is.
+     */
+    private fun resolveRnTeamFu(
+        rnName: String,
+        config: ModuleSizeAnalysisExtension,
+    ): String {
+        config.rnTeamToFuOverrides[rnName]?.let { return it }
+        return normalizeRnTeamName(rnName)
+    }
+
+    private fun normalizeRnTeamName(name: String): String =
+        name.lowercase()
+            .replace(Regex("[\\s\\-/]+"), "_")
+            .replace(Regex("[^a-z0-9_]"), "")
+            .trimEnd('_')
+
+    /**
+     * Generate the proportional-splits.json file from the RN teamBreakdown data.
+     * Each team's source-level byte count is used as the ratio denominator so the CLI
+     * can split the actual compressed APK file size proportionally.
+     */
+    private fun writeProportionalSplits(
+        config: ModuleSizeAnalysisExtension,
+        gson: com.google.gson.Gson,
+        rnAnalysis: RnBundleAnalysis,
+    ) {
+        val totalSourceBytes = rnAnalysis.sourceAttributionBytes.takeIf { it > 0 }
+            ?: rnAnalysis.teamBreakdown.sumOf { it.size }
+        if (totalSourceBytes <= 0) {
+            logger.lifecycle("  RN proportional splits: no source bytes — skipping")
+            return
+        }
+
+        val distribution = linkedMapOf<String, Long>()
+        var attributedBytes = 0L
+        for (entry in rnAnalysis.teamBreakdown) {
+            if (entry.size <= 0) continue
+            val fuName = resolveRnTeamFu(entry.team, config)
+            distribution[fuName] = (distribution[fuName] ?: 0L) + entry.size
+            attributedBytes += entry.size
+        }
+        val remainder = totalSourceBytes - attributedBytes
+        if (remainder > 0) {
+            distribution["reactnative"] = (distribution["reactnative"] ?: 0L) + remainder
+        }
+
+        val splitData = mapOf(
+            "fileSplits" to mapOf(
+                "base/assets/index.android.bundle" to mapOf(
+                    "sourceLob" to "reactnative",
+                    "distribution" to distribution,
+                    "totalSourceBytes" to totalSourceBytes,
+                )
+            )
+        )
+
+        config.proportionalSplitsFile!!.parentFile.mkdirs()
+        config.proportionalSplitsFile!!.writeText(gson.toJson(splitData))
+        logger.lifecycle("  Proportional splits: ${distribution.size} teams, " +
+                "totalSourceBytes=$totalSourceBytes")
+        logger.lifecycle("  Report: ${config.proportionalSplitsFile!!.absolutePath}")
+    }
+
     // ── Report writers ───────────────────────────────────────────────────
 
     private fun writeResourceMappingReport(
@@ -738,6 +829,7 @@ open class AnalyzeModuleSizesTask : DefaultTask() {
         rawMapping: MutableMap<String, MutableList<String>>,
         moduleIndexMap: Map<String, Int>,
         totalMappedFilesCount: Int,
+        rnAnalysis: RnBundleAnalysis?,
     ) {
         // Build negative-index mapping for FU overrides
         val fuNegativeIndex = mutableMapOf<String, Int>()
@@ -768,6 +860,26 @@ open class AnalyzeModuleSizesTask : DefaultTask() {
                     }
                 }
                 logger.lifecycle("  Scanned $dirPath: ${dirOverrideFiles.size} RN resource files")
+            }
+        }
+
+        // Overlay RN assetsByTeam: re-attribute individual images to their team FU.
+        // This overwrites entries already in dirOverrideFiles (e.g. from "reactnative"),
+        // giving per-team granularity. Untraced images stay under their original FU.
+        var rnImageOverrides = 0
+        if (rnAnalysis != null) {
+            for (teamEntry in rnAnalysis.assetsByTeam) {
+                val fuName = resolveRnTeamFu(teamEntry.lob, config)
+                registerFuIndex(fuName)
+                for (file in teamEntry.files) {
+                    val key = "res/${file.relPath}"
+                    dirOverrideFiles[key] = fuName
+                    rnImageOverrides++
+                }
+            }
+            if (rnImageOverrides > 0) {
+                logger.lifecycle("  RN image re-attribution: $rnImageOverrides files across " +
+                        "${rnAnalysis.assetsByTeam.size} teams")
             }
         }
 

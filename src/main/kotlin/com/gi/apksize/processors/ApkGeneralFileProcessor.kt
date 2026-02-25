@@ -25,13 +25,15 @@ class ApkGeneralFileProcessor(private val lobContext: LobContext? = null) : Simp
         val topFilesFilteredList = arrayListOf<ApkFileData>()
         val topImagesList = arrayListOf<ApkFileData>()
         perFileSize.forEach {
-            val name = it.key.removePrefix("/")
+            val rawName = it.key.removePrefix("/")
             val sizeInBytes = it.value
             val sizeInKb = sizeInBytes / Constants.BYTE_TO_KB_DIVIDER
+            val resolvedName = lobContext?.resolveOriginalPath(rawName)
+            val name = resolvedName ?: rawName
             val type = fileTypeLookup(name)
-            val apkFileData = ApkFileData(name, sizeInBytes, sizeInKb, type, type.simpleFileName!!)
-            // Collect raw file data for LOB analysis (before any size filtering)
-            lobContext?.collectFile(name, sizeInBytes, type.fileType)
+            val shortenedPath = if (resolvedName != null) rawName else null
+            val apkFileData = ApkFileData(name, sizeInBytes, sizeInKb, type, type.simpleFileName!!, apkPath = shortenedPath)
+            lobContext?.collectFile(rawName, sizeInBytes, type.fileType)
             if (name == "assets/index.android.bundle") {
                 apkStats.reactBundleSize = sizeInBytes
                 apkStats.reactBundleSizeInMb = ApkSizeHelpers.roundOffDecimal(
