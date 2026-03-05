@@ -13,7 +13,7 @@ configurations {
 }
 
 group = 'com.gi.plugins'
-version = '0.4.4'
+version = '0.4.5'
 def androidToolsVersion = '31.1.0-rc01'
 def protobufVersion = '4.33.5'
 
