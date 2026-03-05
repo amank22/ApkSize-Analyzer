@@ -66,37 +66,38 @@ object ApkSizeTask {
             apkStats.inputFileType = analyzerOptions.inputFileType()
         }
         val outputFolder = holder.outputDir
-        writeApkStatsToJsonFile(apkStats, outputFolder)
-        Printer.log("writeApkStatsToJsonFile done")
-        // Write LOB analysis JSON if present
-        val lobAnalysis = apkStats.lobAnalysis
-        if (lobAnalysis != null) {
-            writeLobAnalysisToJsonFile(lobAnalysis, outputFolder)
-            Printer.log("writeLobAnalysisToJsonFile done")
-        }
-        // Write unmatched details for LOB review
-        val unmatchedDetails = apkStats.unmatchedDetails
-        if (unmatchedDetails != null) {
-            writeUnmatchedDetailsToJsonFile(unmatchedDetails, outputFolder)
-            Printer.log("writeUnmatchedDetailsToJsonFile done")
-        }
-        // Write attributed details for LOB review
-        val attributedDetails = apkStats.attributedDetails
-        if (attributedDetails != null) {
-            writeAttributedDetailsToJsonFile(attributedDetails, outputFolder)
-            Printer.log("writeAttributedDetailsToJsonFile done")
-        }
-        // Write DEX overhead details
-        val dexOverheadDetails = apkStats.dexOverheadDetails
-        if (dexOverheadDetails != null) {
-            writeDexOverheadDetailsToJsonFile(dexOverheadDetails, outputFolder)
-            Printer.log("writeDexOverheadDetailsToJsonFile done")
-        }
-        val html = writeApkStatsToHtmlFile(apkStats, outputFolder, analyzerOptions.isDiffMode)
-//        writeApkStatsToPdfFile(html, outputFolder)
+        writeAllOutputFiles(apkStats, outputFolder, analyzerOptions.isDiffMode)
         if (!analyzerOptions.isDiffMode && !isAab) {
             writeAaptStatsToJsonFile(apkStats, outputFolder)
         }
+    }
+
+    /**
+     * Writes all standard output files: apksize.json, LOB analysis JSONs, and index.html.
+     */
+    private fun writeAllOutputFiles(apkStats: ApkStats, outputFolder: File, isDiffMode: Boolean) {
+        writeApkStatsToJsonFile(apkStats, outputFolder)
+        Printer.log("writeApkStatsToJsonFile done")
+
+        apkStats.lobAnalysis?.let {
+            writeLobAnalysisToJsonFile(it, outputFolder)
+            Printer.log("writeLobAnalysisToJsonFile done")
+        }
+        apkStats.unmatchedDetails?.let {
+            writeUnmatchedDetailsToJsonFile(it, outputFolder)
+            Printer.log("writeUnmatchedDetailsToJsonFile done")
+        }
+        apkStats.attributedDetails?.let {
+            writeAttributedDetailsToJsonFile(it, outputFolder)
+            Printer.log("writeAttributedDetailsToJsonFile done")
+        }
+        apkStats.dexOverheadDetails?.let {
+            writeDexOverheadDetailsToJsonFile(it, outputFolder)
+            Printer.log("writeDexOverheadDetailsToJsonFile done")
+        }
+
+        writeApkStatsToHtmlFile(apkStats, outputFolder, isDiffMode)
+        Printer.log("writeApkStatsToHtmlFile done")
     }
 
     private fun writeAaptStatsToJsonFile(apkStats: ApkStats, outputFolder: File) {
@@ -247,9 +248,7 @@ object ApkSizeTask {
             apkStats.apkName = analyzerOptions.appName
 
             val outputFolder = holder.outputDir
-            writeApkStatsToJsonFile(apkStats, outputFolder)
-            Printer.log("writeApkStatsToJsonFile done")
-            writeApkStatsToHtmlFile(apkStats, outputFolder, isDiffMode = false)
+            writeAllOutputFiles(apkStats, outputFolder, isDiffMode = false)
 
         } finally {
             kotlin.runCatching { tempApksFile.delete() }
