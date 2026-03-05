@@ -8,6 +8,7 @@ import com.android.tools.build.bundletool.model.AppBundle
 import com.android.tools.build.bundletool.model.ModuleDeliveryType
 import com.gi.apksize.models.*
 import com.gi.apksize.processors.*
+import com.gi.apksize.utils.Aapt2Resolver
 import com.gi.apksize.utils.Printer
 import com.google.common.collect.ImmutableSet
 import java.io.File
@@ -203,8 +204,9 @@ object BundleStatsTask : Task {
         appBundle: AppBundle,
     ): GeneratedInstallTimeApk {
         val analyzerOptions = dataHolder.analyzerOptions
-        val aapt2Path = resolveAapt2Path(analyzerOptions)
+        val aapt2PathStr = Aapt2Resolver.resolve(analyzerOptions)
             ?: error("aapt2 not found. Set aapt2Executor in config or ANDROID_HOME/ANDROID_SDK_ROOT.")
+        val aapt2Path = File(aapt2PathStr).toPath()
 
         val moduleMatcher = buildModuleMatcher(analyzerOptions)
         val installTimeModules = resolveInstallTimeModules(appBundle, moduleMatcher)
@@ -334,55 +336,6 @@ object BundleStatsTask : Task {
         }.onFailure {
             Printer.log("Failed to parse aabDeviceSpecPath '$resolvedPath': ${it.message}. Ignoring device-specific matching.")
         }.getOrNull()
-    }
-
-    /**
-     * Resolves the aapt2 executable path.
-     * Priority: 1) config aapt2Executor, 2) ANDROID_HOME/ANDROID_SDK_ROOT, 3) common SDK paths.
-     */
-    private fun resolveAapt2Path(options: AnalyzerOptions): Path? {
-        if (options.aapt2Executor.isNotBlank()) {
-            val configPath = File(options.aapt2Executor)
-            if (configPath.exists() && configPath.canExecute()) {
-                return configPath.toPath()
-            }
-            Printer.log("Configured aapt2Executor '${options.aapt2Executor}' not found or not executable")
-        }
-
-        val sdkRoot = System.getenv("ANDROID_HOME") ?: System.getenv("ANDROID_SDK_ROOT")
-        if (sdkRoot != null) {
-            val aapt2 = findAapt2InSdk(File(sdkRoot))
-            if (aapt2 != null) return aapt2
-        }
-
-        val commonPaths = listOf(
-            "${System.getProperty("user.home")}/Library/Android/sdk",
-            "${System.getProperty("user.home")}/Android/Sdk",
-            "C:\\Users\\${System.getProperty("user.name")}\\AppData\\Local\\Android\\Sdk"
-        )
-        for (path in commonPaths) {
-            val sdkDir = File(path)
-            if (sdkDir.exists()) {
-                val aapt2 = findAapt2InSdk(sdkDir)
-                if (aapt2 != null) return aapt2
-            }
-        }
-        return null
-    }
-
-    /**
-     * Finds the latest executable aapt2 in SDK build-tools.
-     */
-    private fun findAapt2InSdk(sdkDir: File): Path? {
-        val buildToolsDir = File(sdkDir, "build-tools")
-        if (!buildToolsDir.exists()) return null
-        return buildToolsDir.listFiles()
-            ?.filter { it.isDirectory }
-            ?.sortedDescending()
-            ?.firstNotNullOfOrNull { versionDir ->
-                val aapt2 = File(versionDir, "aapt2")
-                if (aapt2.exists() && aapt2.canExecute()) aapt2.toPath() else null
-            }
     }
 
     private fun runProcess(process: Processor<*>, dataHolder: DataHolder, apkStats: ApkStats) {

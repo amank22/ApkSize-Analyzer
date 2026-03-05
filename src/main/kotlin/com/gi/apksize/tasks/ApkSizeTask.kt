@@ -3,6 +3,7 @@ package com.gi.apksize.tasks
 import com.gi.apksize.models.*
 import com.gi.apksize.ui.DiffHtmlGenerator
 import com.gi.apksize.ui.HtmlGenerator
+import com.gi.apksize.utils.Aapt2Resolver
 import com.gi.apksize.utils.Printer
 import com.gi.apksize.utils.compareHolder
 import com.gi.apksize.utils.primaryHolder
@@ -193,8 +194,15 @@ object ApkSizeTask {
 
     /**
      * Handles AAB analysis when bundletool is NOT on the classpath (lite JAR).
-     * Uses external bundletool CLI to convert AAB → universal APK, then runs
-     * standard APK analysis via [SingleStatsTask].
+     * Mirrors [BundleStatsTask] behaviour as closely as possible:
+     *  - When [AnalyzerOptions.useInstallTimeApkForAabAnalysis] is true, discovers
+     *    install-time modules from the AAB and passes `--modules=…` so the generated
+     *    universal APK only contains those modules (matching the full-JAR path).
+     *  - Otherwise builds a universal APK from all modules.
+     *
+     * Limitations vs full JAR: bundle-level processors (module size breakdown,
+     * resource analysis, metadata extraction, estimated download sizes) cannot run
+     * because they require the bundletool Java API.
      */
     private fun evaluateAabViaCliAndApkAnalysis(
         analyzerOptions: AnalyzerOptions,
@@ -203,11 +211,21 @@ object ApkSizeTask {
         val bundletoolJar = File(analyzerOptions.bundletoolJarPath)
         val aabPath = holder.primaryFile.file.absolutePath
 
-        // 1. Generate universal APK from AAB via bundletool CLI
         val tempApksFile = Files.createTempFile("bundletool-cli-", ".apks").toFile()
         val tempApkFile = Files.createTempFile("bundletool-cli-universal-", ".apk").toFile()
         try {
-            Printer.log("Generating universal APK from AAB via external bundletool CLI...")
+            // 1. Determine which modules to include
+            val installTimeModules = if (analyzerOptions.useInstallTimeApkForAabAnalysis) {
+                kotlin.runCatching {
+                    resolveInstallTimeModulesViaCli(bundletoolJar, aabPath)
+                }.onFailure {
+                    Printer.log("Failed to discover install-time modules, including all: ${it.message}")
+                }.getOrNull()
+            } else null
+
+            val filteredModules = !installTimeModules.isNullOrEmpty()
+
+            // 2. Build universal APK via bundletool CLI
             val buildApksArgs = mutableListOf(
                 "java", "-jar", bundletoolJar.absolutePath,
                 "build-apks",
@@ -216,24 +234,36 @@ object ApkSizeTask {
                 "--overwrite",
                 "--mode=universal"
             )
-
-            // Add aapt2 path if available
-            val aapt2Path = resolveAapt2ForCli(analyzerOptions)
+            if (filteredModules) {
+                buildApksArgs.add("--modules=${installTimeModules!!.joinToString(",")}")
+                Printer.log("Building install-time universal APK with modules: ${installTimeModules.joinToString(", ")}")
+            } else {
+                Printer.log("Building universal APK with all modules.")
+            }
+            val aapt2Path = Aapt2Resolver.resolve(analyzerOptions)
             if (aapt2Path != null) {
                 buildApksArgs.add("--aapt2=$aapt2Path")
             }
 
-            val buildResult = runCliCommand(buildApksArgs)
+            var buildResult = runCliCommand(buildApksArgs)
+
+            // If module-filtered build fails, retry with all modules as fallback
+            if (buildResult != 0 && filteredModules) {
+                Printer.log("Module-filtered build failed (exit $buildResult), retrying with all modules...")
+                kotlin.runCatching { tempApksFile.delete() }
+                val retryArgs = buildApksArgs.filterNot { it.startsWith("--modules=") }.toMutableList()
+                buildResult = runCliCommand(retryArgs)
+            }
             if (buildResult != 0) {
                 Printer.error("bundletool build-apks failed (exit code $buildResult). Cannot analyze AAB with lite JAR.")
                 return
             }
 
-            // 2. Extract universal APK from the .apks zip archive
+            // 3. Extract universal APK from .apks archive
             extractUniversalApkFromArchive(tempApksFile, tempApkFile)
             Printer.log("Extracted universal APK for analysis.")
 
-            // 3. Run standard APK analysis on the generated APK
+            // 4. Run standard APK analysis
             val apkHolder = holder.copy(
                 primaryFile = FileHolder(
                     file = tempApkFile,
@@ -242,23 +272,119 @@ object ApkSizeTask {
             )
             val apkStats = SingleStatsTask.process(apkHolder)
             apkStats.inputFileType = InputFileType.AAB
-            apkStats.isInstallTimeApkAnalysis = true
+            apkStats.isInstallTimeApkAnalysis = filteredModules
+            apkStats.apkName = analyzerOptions.appName
 
             Printer.log("tasks done : $apkStats")
-            apkStats.apkName = analyzerOptions.appName
 
             val outputFolder = holder.outputDir
             writeAllOutputFiles(apkStats, outputFolder, isDiffMode = false)
-
         } finally {
             kotlin.runCatching { tempApksFile.delete() }
             kotlin.runCatching { tempApkFile.delete() }
         }
 
-        val fileTypeLabel = "AAB"
-        Printer.log("Analysed $fileTypeLabel (via lite JAR + external bundletool). " +
-                "Output at ${analyzerOptions.outputFolderPath}.")
+        Printer.log(
+            "Analysed AAB (via lite JAR + external bundletool). " +
+                    "Output at ${analyzerOptions.outputFolderPath}."
+        )
     }
+
+    // -----------------------------------------------------------------------
+    //  Install-time module discovery via CLI
+    // -----------------------------------------------------------------------
+
+    /**
+     * Discovers install-time modules from an AAB by enumerating its module
+     * directories, then using `bundletool dump manifest` per module to check
+     * delivery type and fusing — mirroring [BundleStatsTask.resolveInstallTimeModules].
+     *
+     * Conditional-delivery modules are excluded (matching full-JAR behaviour
+     * when no device-spec is provided).
+     */
+    private fun resolveInstallTimeModulesViaCli(
+        bundletoolJar: File,
+        aabPath: String,
+    ): Set<String>? {
+        val moduleNames = discoverModulesFromAab(aabPath)
+        if (moduleNames.isEmpty()) {
+            Printer.log("No modules discovered from AAB.")
+            return null
+        }
+        Printer.log("Discovered ${moduleNames.size} modules in AAB: ${moduleNames.joinToString(", ")}")
+
+        val installTimeModules = linkedSetOf<String>()
+
+        for (moduleName in moduleNames) {
+            if (moduleName == "base") {
+                installTimeModules.add(moduleName)
+                continue
+            }
+
+            val manifestXml = dumpModuleManifest(bundletoolJar, aabPath, moduleName)
+            if (manifestXml == null) {
+                Printer.log("Module '$moduleName': could not dump manifest, skipping")
+                continue
+            }
+
+            val hasInstallTimeDelivery = manifestXml.contains("<dist:install-time")
+            val hasConditionalDelivery = manifestXml.contains("<dist:conditions")
+            val hasOnDemandDelivery = manifestXml.contains("<dist:on-demand")
+            val isIncludedInFusing = manifestXml.contains("dist:include=\"true\"")
+                    || manifestXml.contains("dist:include='true'")
+
+            val isUnconditionalInstallTime =
+                hasInstallTimeDelivery && !hasConditionalDelivery && !hasOnDemandDelivery
+
+            if (isUnconditionalInstallTime && isIncludedInFusing) {
+                installTimeModules.add(moduleName)
+                Printer.log("Module '$moduleName': install-time, fusing=true → included")
+            } else {
+                Printer.log(
+                    "Module '$moduleName': excluded " +
+                            "(installTime=$hasInstallTimeDelivery, conditional=$hasConditionalDelivery, " +
+                            "onDemand=$hasOnDemandDelivery, fusing=$isIncludedInFusing)"
+                )
+            }
+        }
+
+        return installTimeModules.ifEmpty { null }
+    }
+
+    /**
+     * Enumerates module directories inside an AAB zip (top-level dirs that are
+     * not metadata entries like `META-INF/` or root proto files).
+     */
+    private fun discoverModulesFromAab(aabPath: String): Set<String> {
+        return ZipFile(File(aabPath)).use { zip ->
+            zip.entries().asSequence()
+                .map { it.name.substringBefore('/') }
+                .filter { name ->
+                    name.isNotEmpty() && !name.endsWith(".pb") && !name.startsWith("META-INF")
+                            && !name.contains('.')
+                }
+                .toSortedSet()
+        }
+    }
+
+    private fun dumpModuleManifest(bundletoolJar: File, aabPath: String, moduleName: String): String? {
+        return kotlin.runCatching {
+            runCliCommandAndCapture(
+                listOf(
+                    "java", "-jar", bundletoolJar.absolutePath,
+                    "dump", "manifest",
+                    "--bundle=$aabPath",
+                    "--module=$moduleName"
+                )
+            )
+        }.onFailure {
+            Printer.log("bundletool dump manifest failed for '$moduleName': ${it.message}")
+        }.getOrNull()
+    }
+
+    // -----------------------------------------------------------------------
+    //  CLI helpers
+    // -----------------------------------------------------------------------
 
     private fun extractUniversalApkFromArchive(apksFile: File, targetApkFile: File) {
         ZipFile(apksFile).use { zip ->
@@ -274,35 +400,35 @@ object ApkSizeTask {
             zip.getInputStream(entry).use { input ->
                 Files.copy(input, targetApkFile.toPath(), StandardCopyOption.REPLACE_EXISTING)
             }
+            Printer.log("Extracted APK entry: ${entry.name}")
         }
     }
 
+    /** Runs a CLI command, streaming stdout/stderr to [Printer], and returns exit code. */
     private fun runCliCommand(args: List<String>): Int {
         val process = ProcessBuilder(args)
             .redirectErrorStream(true)
             .start()
-        // Stream output to our logger
         process.inputStream.bufferedReader().forEachLine { line ->
             Printer.log("[bundletool] $line")
         }
         return process.waitFor()
     }
 
-    private fun resolveAapt2ForCli(options: AnalyzerOptions): String? {
-        if (options.aapt2Executor.isNotBlank()) {
-            val f = File(options.aapt2Executor)
-            if (f.exists() && f.canExecute()) return f.absolutePath
+    /** Runs a CLI command and captures stdout. Returns null on non-zero exit. */
+    private fun runCliCommandAndCapture(args: List<String>): String? {
+        val process = ProcessBuilder(args)
+            .redirectErrorStream(false)
+            .start()
+        val stdout = process.inputStream.bufferedReader().readText()
+        val stderr = process.errorStream.bufferedReader().readText()
+        val exitCode = process.waitFor()
+        if (exitCode != 0) {
+            Printer.log("CLI command failed (exit $exitCode): ${args.joinToString(" ")}")
+            if (stderr.isNotBlank()) Printer.log("stderr: $stderr")
+            return null
         }
-        val sdkRoot = System.getenv("ANDROID_HOME") ?: System.getenv("ANDROID_SDK_ROOT") ?: return null
-        val buildToolsDir = File(sdkRoot, "build-tools")
-        if (!buildToolsDir.exists()) return null
-        return buildToolsDir.listFiles()
-            ?.filter { it.isDirectory }
-            ?.sortedDescending()
-            ?.firstNotNullOfOrNull { dir ->
-                val aapt2 = File(dir, "aapt2")
-                if (aapt2.exists() && aapt2.canExecute()) aapt2.absolutePath else null
-            }
+        return stdout
     }
 
 }
