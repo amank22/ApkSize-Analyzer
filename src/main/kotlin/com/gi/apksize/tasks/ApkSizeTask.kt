@@ -294,7 +294,7 @@ object ApkSizeTask {
             kotlin.runCatching {
                 val deps = BundleDependencyExtractor.extractFromAabZip(aabPath)
                 if (deps.isNotEmpty()) {
-                    apkStats.bundleDependencies = deps
+                    apkStats.bundleDependencies = BundleDependencyInfo.categorize(deps, analyzerOptions.appModulePrefixes)
                     apkStats.appModulePrefixes = analyzerOptions.appModulePrefixes
                     Printer.log("Extracted ${deps.size} dependencies from AAB metadata (lite path)")
                 }
