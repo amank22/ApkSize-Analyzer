@@ -1,6 +1,7 @@
 package com.gi.apksize.tasks
 
 import com.gi.apksize.models.*
+import com.gi.apksize.processors.BundleDependencyExtractor
 import com.gi.apksize.ui.DiffHtmlGenerator
 import com.gi.apksize.ui.HtmlGenerator
 import com.gi.apksize.utils.Aapt2Resolver
@@ -96,6 +97,10 @@ object ApkSizeTask {
             writeDexOverheadDetailsToJsonFile(it, outputFolder)
             Printer.log("writeDexOverheadDetailsToJsonFile done")
         }
+        apkStats.bundleDependencies?.let {
+            writeBundleDependenciesToJsonFile(it, outputFolder)
+            Printer.log("writeBundleDependenciesToJsonFile done")
+        }
 
         writeApkStatsToHtmlFile(apkStats, outputFolder, isDiffMode)
         Printer.log("writeApkStatsToHtmlFile done")
@@ -140,6 +145,16 @@ object ApkSizeTask {
         }
         val gson = GsonBuilder().setPrettyPrinting().create()
         reportFile.writeText(gson.toJson(details))
+    }
+
+    private fun writeBundleDependenciesToJsonFile(deps: List<BundleDependencyInfo>, outputFolder: File) {
+        val reportFile = File(outputFolder, "bundle-dependencies.json")
+        if (reportFile.exists()) {
+            reportFile.delete()
+            reportFile.createNewFile()
+        }
+        val gson = GsonBuilder().setPrettyPrinting().create()
+        reportFile.writeText(gson.toJson(deps))
     }
 
     private fun writeLobAnalysisToJsonFile(lobAnalysis: LobAnalysisResult, outputFolder: File) {
@@ -275,6 +290,18 @@ object ApkSizeTask {
             apkStats.isInstallTimeApkAnalysis = filteredModules
             apkStats.apkName = analyzerOptions.appName
 
+            // Extract bundle metadata directly from AAB ZIP (no bundletool API needed)
+            kotlin.runCatching {
+                val deps = BundleDependencyExtractor.extractFromAabZip(aabPath)
+                if (deps.isNotEmpty()) {
+                    apkStats.bundleDependencies = deps
+                    apkStats.appModulePrefixes = analyzerOptions.appModulePrefixes
+                    Printer.log("Extracted ${deps.size} dependencies from AAB metadata (lite path)")
+                }
+            }.onFailure {
+                Printer.log("Failed to extract dependencies from AAB: ${it.message}")
+            }
+
             Printer.log("tasks done : $apkStats")
 
             val outputFolder = holder.outputDir
@@ -361,7 +388,7 @@ object ApkSizeTask {
                 .map { it.name.substringBefore('/') }
                 .filter { name ->
                     name.isNotEmpty() && !name.endsWith(".pb") && !name.startsWith("META-INF")
-                            && !name.contains('.')
+                            && name != "BUNDLE-METADATA" && !name.contains('.')
                 }
                 .toSortedSet()
         }
