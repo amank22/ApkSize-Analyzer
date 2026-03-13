@@ -740,17 +740,12 @@ object HtmlGenerator {
     }
 
     /**
-     * Shows Maven dependencies extracted from AAB metadata, grouped by category:
-     * - App Modules (matched via appModulePrefixes config)
-     * - Android / Google (androidx.*, com.google.*, com.android.*)
-     * - Third-party (everything else)
+     * Shows Maven dependencies extracted from AAB metadata, grouped by the
+     * pre-computed [BundleDependencyInfo.category] (app, platform, third_party).
      */
     private fun bundleDependenciesSection(apkStats: ApkStats): BlockElement {
         val deps = apkStats.bundleDependencies
         if (deps.isNullOrEmpty()) return div { }
-
-        val appPrefixes = apkStats.appModulePrefixes
-        val platformPrefixes = listOf("androidx.", "com.google.", "com.android.", "org.jetbrains.")
 
         data class DepGroup(
             val title: String,
@@ -758,26 +753,16 @@ object HtmlGenerator {
             val deps: List<BundleDependencyInfo>
         )
 
-        val appModuleDeps = if (appPrefixes.isNotEmpty()) {
-            deps.filter { dep -> appPrefixes.any { prefix -> dep.groupId.startsWith(prefix) } }
-        } else {
-            emptyList()
-        }
-        val platformDeps = deps.filter { dep ->
-            platformPrefixes.any { prefix -> dep.groupId.startsWith(prefix) } &&
-                    dep !in appModuleDeps
-        }
-        val thirdPartyDeps = deps - appModuleDeps.toSet() - platformDeps.toSet()
-
+        val byCategory = deps.groupBy { it.category }
         val groups = mutableListOf<DepGroup>()
-        if (appModuleDeps.isNotEmpty()) {
-            groups.add(DepGroup("App Modules (${appModuleDeps.size})", "is-success", appModuleDeps))
+        byCategory[BundleDependencyInfo.CATEGORY_APP]?.let {
+            groups.add(DepGroup("App Modules (${it.size})", "is-success", it))
         }
-        if (platformDeps.isNotEmpty()) {
-            groups.add(DepGroup("Android / Google / Kotlin (${platformDeps.size})", "is-info", platformDeps))
+        byCategory[BundleDependencyInfo.CATEGORY_PLATFORM]?.let {
+            groups.add(DepGroup("Android / Google / Kotlin (${it.size})", "is-info", it))
         }
-        if (thirdPartyDeps.isNotEmpty()) {
-            groups.add(DepGroup("Third-party (${thirdPartyDeps.size})", "is-warning", thirdPartyDeps))
+        byCategory[BundleDependencyInfo.CATEGORY_THIRD_PARTY]?.let {
+            groups.add(DepGroup("Third-party (${it.size})", "is-warning", it))
         }
 
         return div(classes = "container mt-6") {

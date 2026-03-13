@@ -16,13 +16,12 @@ class BundleMetadataProcessor(private val bundleHolder: BundleHolder) : SimplePr
 
     override fun process(dataHolder: DataHolder, apkStats: ApkStats) {
         val appBundle = bundleHolder.appBundle
-
-        // Pass app module prefixes from config so the HTML generator can group dependencies
-        apkStats.appModulePrefixes = dataHolder.analyzerOptions.appModulePrefixes
+        val appPrefixes = dataHolder.analyzerOptions.appModulePrefixes
+        apkStats.appModulePrefixes = appPrefixes
 
         extractManifestInfo(appBundle, apkStats)
         extractBundleConfig(appBundle, apkStats)
-        extractDependencies(appBundle, apkStats)
+        extractDependencies(appBundle, apkStats, appPrefixes)
     }
 
     /**
@@ -79,7 +78,11 @@ class BundleMetadataProcessor(private val bundleHolder: BundleHolder) : SimplePr
     /**
      * Extracts app dependencies from BUNDLE-METADATA/com.android.tools.build.libraries/dependencies.pb.
      */
-    private fun extractDependencies(appBundle: com.android.tools.build.bundletool.model.AppBundle, apkStats: ApkStats) {
+    private fun extractDependencies(
+        appBundle: com.android.tools.build.bundletool.model.AppBundle,
+        apkStats: ApkStats,
+        appPrefixes: List<String>
+    ) {
         try {
             val metadata = appBundle.bundleMetadata
             val depsNamespace = "com.android.tools.build.libraries"
@@ -106,7 +109,7 @@ class BundleMetadataProcessor(private val bundleHolder: BundleHolder) : SimplePr
             }.distinctBy { "${it.groupId}:${it.artifactId}:${it.version}" }
                 .sortedBy { "${it.groupId}:${it.artifactId}" }
 
-            apkStats.bundleDependencies = dependencyList
+            apkStats.bundleDependencies = BundleDependencyInfo.categorize(dependencyList, appPrefixes)
             Printer.log("Found ${dependencyList.size} dependencies in bundle metadata")
         } catch (e: Exception) {
             Printer.log("Failed to extract dependencies: ${e.message}")
