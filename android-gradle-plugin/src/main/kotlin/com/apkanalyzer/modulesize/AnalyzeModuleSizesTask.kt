@@ -885,6 +885,7 @@ open class AnalyzeModuleSizesTask : DefaultTask() {
 
         // Convert to indexed mapping
         var fuOverrideCount = 0
+        val matchedDirOverrides = HashSet<String>()
         val indexedMapping = rawMapping.map { (path, modIds) ->
             var fuHit: String? = null
 
@@ -895,7 +896,7 @@ open class AnalyzeModuleSizesTask : DefaultTask() {
             }
             if (fuHit == null && dirOverrideFiles.isNotEmpty()) {
                 val stripped = path.substringAfter('/', path)
-                dirOverrideFiles[stripped]?.let { fuHit = it }
+                dirOverrideFiles[stripped]?.let { fuHit = it; matchedDirOverrides.add(stripped) }
             }
 
             if (fuHit != null) {
@@ -904,7 +905,24 @@ open class AnalyzeModuleSizesTask : DefaultTask() {
             } else {
                 path to modIds.mapNotNull { moduleIndexMap[it] }
             }
-        }.toMap()
+        }.toMap().toMutableMap()
+
+        // Add dirOverrideFiles entries not already present in rawMapping.
+        // These are typically RN-generated resources from build/generated/res/ that
+        // scanFilePathsFromLocalModule doesn't pick up (it only reads source dirs).
+        if (dirOverrideFiles.isNotEmpty()) {
+            var addedCount = 0
+            dirOverrideFiles.forEach { (resPath, fuName) ->
+                if (resPath !in matchedDirOverrides) {
+                    indexedMapping["base/$resPath"] = listOf(fuNegativeIndex[fuName]!!)
+                    fuOverrideCount++
+                    addedCount++
+                }
+            }
+            if (addedCount > 0) {
+                logger.lifecycle("  Dir override new entries: $addedCount files added (not in module scan)")
+            }
+        }
 
         if (fuOverrideCount > 0) logger.lifecycle("  FU overrides applied: $fuOverrideCount files")
         val collisionCount = rawMapping.count { (_, v) -> v.size > 1 }
